@@ -72,12 +72,12 @@ def backup_database():
         # Copy the database file
         shutil.copy2(DB_PATH, backup_path)
         
-        # Keep only the 5 most recent backups
+        # Keep only the most recent backup
         backups = sorted([os.path.join(BACKUP_DIR, f) for f in os.listdir(BACKUP_DIR) 
                           if f.startswith("debtbot_backup_") and f.endswith(".db")])
         
-        if len(backups) > 5:
-            for old_backup in backups[:-5]:
+        if len(backups) > 1:
+            for old_backup in backups[:-1]:
                 os.remove(old_backup)
                 
         print(f"Database backed up to {backup_path}")
@@ -954,7 +954,7 @@ def status_command(update, context):
 🔄 *Backups*:
 - Location: {BACKUP_DIR}
 - Count: {backup_count} backups
-- Auto-backup: Every hour
+- Auto-backup: Every hour (keeping only the latest backup)
 
 🤖 *Process*:
 - PID: {os.getpid()}
