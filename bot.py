@@ -4,11 +4,66 @@ from datetime import datetime
 import math
 import requests
 from io import BytesIO
+import os
+import shutil
+import time
+import threading
+
+# Set database path - use environment variable or default to data directory
+DB_DIR = os.environ.get('DB_DIR', os.path.join(os.path.expanduser('~'), 'bot_data'))
+DB_PATH = os.environ.get('DB_PATH', os.path.join(DB_DIR, 'debtbot.db'))
+BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(DB_DIR, 'backups'))
+
+# Ensure directories exist
+os.makedirs(DB_DIR, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
+print(f"Using database at: {DB_PATH}")
+print(f"Using backup directory: {BACKUP_DIR}")
+
+# Backup function
+def backup_database():
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = os.path.join(BACKUP_DIR, f"debtbot_backup_{timestamp}.db")
+    
+    try:
+        # Create a connection to make sure all transactions are saved
+        temp_conn = sqlite3.connect(DB_PATH)
+        temp_conn.close()
+        
+        # Copy the database file
+        shutil.copy2(DB_PATH, backup_path)
+        
+        # Keep only the 5 most recent backups
+        backups = sorted([os.path.join(BACKUP_DIR, f) for f in os.listdir(BACKUP_DIR) 
+                          if f.startswith("debtbot_backup_") and f.endswith(".db")])
+        
+        if len(backups) > 5:
+            for old_backup in backups[:-5]:
+                os.remove(old_backup)
+                
+        print(f"Database backed up to {backup_path}")
+        return True
+    except Exception as e:
+        print(f"Backup failed: {str(e)}")
+        return False
+
+# Periodic backup function
+def scheduled_backup():
+    while True:
+        time.sleep(3600)  # Backup every hour
+        backup_database()
+
+# Start backup thread
+backup_thread = threading.Thread(target=scheduled_backup, daemon=True)
+backup_thread.start()
+
+# Create initial backup
+backup_database()
 
 # ====== DB Migration ======
 def migrate_database():
     print("Performing complete database migration...")
-    conn = sqlite3.connect("debtbot.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     # Create a backup of the debts table
@@ -88,7 +143,7 @@ def migrate_database():
 migrate_database()
 
 # ====== DB Setup ======
-conn = sqlite3.connect("debtbot.db", check_same_thread=False)
+conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS debts (
@@ -137,7 +192,7 @@ def add_debt(update, context):
         timestamp = datetime.now().isoformat()
         
         if creditor.lower() == debtor.lower():
-            update.message.reply_text("❌ Không thể ghi nợ chính mình.")
+            update.message.reply_text("❌ Khôm thể ghi nợ chính mình.")
             return
 
         cursor.execute(
@@ -153,9 +208,9 @@ def add_debt(update, context):
             f"✅ {creditor_display} đã ghi nợ {debtor_display} {amount} đ" + (f" cho {note}" if note else "")
         )
     except IndexError:
-        update.message.reply_text("❌ Sai cú pháp. Ví dụ: /adddebt @toan 500 Trà sữa")
+        update.message.reply_text("❌ Sai cú pháp gòi. Ví dụ: /adddebt @toan 500 Trà sữa")
     except ValueError:
-        update.message.reply_text("❌ Số tiền không hợp lệ. Ví dụ: /adddebt @toan 500 Trà sữa")
+        update.message.reply_text("❌ Số tiền Khôm hợp lệ. Ví dụ: /adddebt @toan 500 Trà sữa")
     except Exception as e:
         update.message.reply_text(f"❌ Lỗi: {str(e)}")
 
@@ -201,7 +256,7 @@ def summary(update, context):
             # Format with aligned columns
             msg += f" - {debtor_display.ljust(max_name_length)} : {format_money(amt)} {bar}\n"
     else:
-        msg += "🟢 NGƯỜI KHÁC NỢ: Không có\n"
+        msg += "🟢 NGƯỜI KHÁC NỢ: Khôm có\n"
 
     if you_owe:
         msg += "\n🔴 NỢ NGƯỜI KHÁC:\n"
@@ -217,7 +272,7 @@ def summary(update, context):
             # Format with aligned columns
             msg += f" - {creditor_display.ljust(max_name_length)} : {format_money(amt)} {bar}\n"
     else:
-        msg += "\n🔴 NỢ NGƯỜI KHÁC: Không có\n"
+        msg += "\n🔴 NỢ NGƯỜI KHÁC: Khôm có\n"
         
     # Calculate net balance
     total_owned = sum([amt for _, amt in you_own]) if you_own else 0
@@ -248,7 +303,7 @@ def clear_debt(update, context):
             return
         
         if not context.args:
-            update.message.reply_text("❌ Sai cú pháp. Ví dụ: /cleardebt @toan 500 hoặc /cleardebt @toan @hoa")
+            update.message.reply_text("❌ Sai cú pháp gòi. Ví dụ: /cleardebt @toan 500 hoặc /cleardebt @toan @hoa")
             return
             
         # Check if the last argument is a number (amount)
@@ -294,7 +349,7 @@ def clear_debt(update, context):
                 else:
                     results.append(f"✅ Đã xóa toàn bộ khoản nợ với {other_display}")
             else:
-                results.append(f"❌ Không tìm thấy khoản nợ nào với {other_display}")
+                results.append(f"❌ Khôm tìm thấy khoản nợ nào với {other_display}")
             
         conn.commit()
         user_display = get_display_name(user, chat_id)
@@ -317,7 +372,7 @@ def set_name(update, context):
         chat_id = update.effective_chat.id
         
         if len(context.args) < 2:
-            update.message.reply_text("❌ Sai cú pháp. Ví dụ: /setname @toan 'Anh Nam'")
+            update.message.reply_text("❌ Sai cú pháp gòi. Ví dụ: /setname @toan 'Anh Nam'")
             return
             
         username = context.args[0].replace('@', '')
@@ -365,7 +420,7 @@ def history(update, context):
     transactions = cursor.fetchall()
     
     if not transactions:
-        update.message.reply_text("Không có lịch sử giao dịch nào.")
+        update.message.reply_text("Khôm có lịch sử giao dịch nào.")
         return
     
     display_name = get_display_name(username, chat_id)
@@ -407,7 +462,7 @@ def group_summary(update, context):
     users = [row[0] for row in cursor.fetchall()]
     
     if not users:
-        update.message.reply_text("Không có khoản nợ nào trong nhóm này.")
+        update.message.reply_text("Khôm có khoản nợ nào trong nhóm này.")
         return
         
     msg = "📊 TỔNG HỢP NỢ TRONG NHÓM\n\n"
@@ -467,7 +522,7 @@ def group_summary(update, context):
     
     # Zero balances
     if zero_balances:
-        msg += "\n⚪ KHÔNG NỢ/ĐƯỢC NỢ:\n"
+        msg += "\n⚪ Khôm NỢ/ĐƯỢC NỢ:\n"
         for user, _ in zero_balances:
             user_display = get_display_name(user, chat_id)
             msg += f" - {user_display}: 0 đ\n"
@@ -484,14 +539,14 @@ def divide_expense(update, context):
             return
             
         if len(context.args) < 2:
-            update.message.reply_text("❌ Sai cú pháp. Ví dụ: /divide 500 @toan @quy @tuan [Tiền ăn]")
+            update.message.reply_text("❌ Sai cú pháp gòi. Ví dụ: /divide 500 @toan @quy @tuan [Tiền ăn]")
             return
             
         # Parse amount
         try:
             amount = float(context.args[0])
         except ValueError:
-            update.message.reply_text("❌ Số tiền không hợp lệ. Ví dụ: /divide 500 @toan @quy @tuan")
+            update.message.reply_text("❌ Số tiền Khôm hợp lệ. Ví dụ: /divide 500 @toan @quy @tuan")
             return
             
         # Parse debtors (filter out any non-username args after the amount)
@@ -511,7 +566,7 @@ def divide_expense(update, context):
             include_self = True
             
         if not debtors:
-            update.message.reply_text("❌ Không thể chia tiền chỉ cho bản thân.")
+            update.message.reply_text("❌ Khôm thể chia tiền chỉ cho bản thân.")
             return
         
         # Only include sender in division if they were explicitly mentioned
@@ -588,7 +643,7 @@ def set_qr(update, context):
             return
             
         if len(context.args) < 1:
-            update.message.reply_text("❌ Sai cú pháp. Ví dụ: /setqr https://example.com/myqrcode.jpg")
+            update.message.reply_text("❌ Sai cú pháp gòi. Ví dụ: /setqr https://example.com/myqrcode.jpg")
             return
             
         image_url = context.args[0]
@@ -597,10 +652,10 @@ def set_qr(update, context):
         try:
             response = requests.head(image_url, timeout=5)
             if not response.ok or not response.headers.get('content-type', '').startswith('image/'):
-                update.message.reply_text("❌ URL không hợp lệ hoặc không phải hình ảnh.")
+                update.message.reply_text("❌ URL Khôm hợp lệ hoặc Khôm phải hình ảnh.")
                 return
         except:
-            update.message.reply_text("❌ Không thể truy cập URL. Vui lòng kiểm tra lại.")
+            update.message.reply_text("❌ Khôm thể truy cập URL. Vui lòng kiểm tra lại.")
             return
             
         # Store QR code URL
@@ -637,7 +692,7 @@ def get_qr(update, context):
         
         if not result:
             display_name = get_display_name(target_username, chat_id)
-            update.message.reply_text(f"❌ Không tìm thấy QR code cho {display_name}.")
+            update.message.reply_text(f"❌ Khôm tìm thấy QR code cho {display_name}.")
             return
             
         image_url = result[0]
@@ -652,7 +707,7 @@ def get_qr(update, context):
                     caption=f"QR code của {display_name}"
                 )
             else:
-                update.message.reply_text(f"❌ Không thể tải QR code. URL không hợp lệ hoặc đã hết hạn.")
+                update.message.reply_text(f"❌ Khôm thể tải QR code. URL Khôm hợp lệ hoặc đã hết hạn.")
         except Exception as e:
             update.message.reply_text(f"❌ Lỗi khi tải QR code: {str(e)}")
     except Exception as e:
@@ -660,7 +715,7 @@ def get_qr(update, context):
 
 def help_command(update, context):
     help_text = """
-📋 *HƯỚNG DẪN SỬ DỤNG DEBTBOT*
+📋 *HƯỚNG DẪN SỬ DỤNG BOT CHO HỘI NGƯỜI HÈN VN*
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 💰 *QUẢN LÝ NỢ*
@@ -699,16 +754,107 @@ def help_command(update, context):
 • `/setname @username tên_hiển_thị` - Đặt tên hiển thị
   _Ví dụ: /setname @toan Anh Toàn_
 
-• `/help` - Hiển thị trợ giúp này
+🛠️ *ADMIN COMMANDS*
+• `/backup` - Tạo bản sao lưu cơ sở dữ liệu (chỉ dành cho Admin)
+• `/restore` - Khôi phục cơ sở dữ liệu từ bản sao lưu (chỉ dành cho Admin)
 
-💡 *Mẹo*: QR code có thể là ảnh mã QR thanh toán từ ví điện tử của bạn
+💡 *Mẹo*: 
+- QR code có thể là ảnh mã QR thanh toán từ ví điện tử của bạn
+- Dữ liệu được lưu tại: {DB_PATH}
+- Backup tự động mỗi giờ và khi khởi động
 """
+    # Replace the DB_PATH placeholder with actual path
+    help_text = help_text.replace("{DB_PATH}", DB_PATH)
+    
     update.message.reply_text(help_text, parse_mode='Markdown')
+
+# ====== Admin Commands ======
+
+def backup_command(update, context):
+    # Check if user is admin (you can modify this check as needed)
+    if update.effective_user.id in ADMIN_IDS:
+        if backup_database():
+            update.message.reply_text("✅ Database backed up successfully.")
+        else:
+            update.message.reply_text("❌ Backup failed.")
+    else:
+        update.message.reply_text("❌ Only admins can use this command.")
+
+def restore_command(update, context):
+    # Check if user is admin
+    if update.effective_user.id not in ADMIN_IDS:
+        update.message.reply_text("❌ Only admins can use this command.")
+        return
+        
+    # List available backups
+    try:
+        backups = sorted([f for f in os.listdir(BACKUP_DIR) 
+                      if f.startswith("debtbot_backup_") and f.endswith(".db")])
+        
+        if not backups:
+            update.message.reply_text("❌ No backups found.")
+            return
+            
+        if not context.args:
+            # Show list of available backups
+            msg = "Available backups:\n\n"
+            for i, backup in enumerate(backups):
+                # Extract timestamp from filename
+                timestamp = backup.replace("debtbot_backup_", "").replace(".db", "")
+                # Format it for display
+                try:
+                    dt = datetime.strptime(timestamp, "%Y%m%d_%H%M%S")
+                    formatted_time = dt.strftime("%d/%m/%Y %H:%M:%S")
+                    msg += f"{i+1}. {formatted_time}\n"
+                except:
+                    msg += f"{i+1}. {timestamp}\n"
+                    
+            msg += "\nUse /restore [number] to restore a backup"
+            update.message.reply_text(msg)
+            return
+            
+        # Parse backup number
+        try:
+            backup_index = int(context.args[0]) - 1
+            if backup_index < 0 or backup_index >= len(backups):
+                update.message.reply_text("❌ Invalid backup number.")
+                return
+                
+            backup_file = backups[backup_index]
+            backup_path = os.path.join(BACKUP_DIR, backup_file)
+            
+            # Close current connection
+            global conn, cursor
+            conn.close()
+            
+            # Backup current DB before restoring
+            emergency_backup_path = os.path.join(BACKUP_DIR, f"emergency_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
+            shutil.copy2(DB_PATH, emergency_backup_path)
+            
+            # Restore from backup
+            shutil.copy2(backup_path, DB_PATH)
+            
+            # Reconnect to DB
+            conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+            cursor = conn.cursor()
+            
+            update.message.reply_text(f"✅ Database restored from backup: {backup_file}")
+        except ValueError:
+            update.message.reply_text("❌ Please provide a valid backup number.")
+        except Exception as e:
+            update.message.reply_text(f"❌ Restore failed: {str(e)}")
+    except Exception as e:
+        update.message.reply_text(f"❌ Error: {str(e)}")
 
 # ====== Main Bot Setup ======
 
 def main():
     TOKEN = "8123653342:AAHibawwr85tnUHUyHP3Eowghod2OicBqJg"  # <-- Bệ hạ nhớ dán token bot ở đây
+    
+    # Define your admin user IDs here
+    global ADMIN_IDS
+    ADMIN_IDS = [1095200180]  # Replace with your Telegram user ID
+    
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
 
@@ -723,6 +869,10 @@ def main():
     dp.add_handler(CommandHandler("qr", get_qr, filters=Filters.chat_type.groups | Filters.chat_type.private))
     dp.add_handler(CommandHandler("get", get_qr, filters=Filters.chat_type.groups | Filters.chat_type.private))
     dp.add_handler(CommandHandler("help", help_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
+    
+    # Admin commands
+    dp.add_handler(CommandHandler("backup", backup_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
+    dp.add_handler(CommandHandler("restore", restore_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
 
     print("Bot started. Press Ctrl+C to stop.")
     updater.start_polling()
