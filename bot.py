@@ -798,10 +798,7 @@ def help_command(update, context):
 - QR code có thể là ảnh mã QR thanh toán từ ví điện tử của bạn
 - Dữ liệu được lưu tại: {DB_PATH}
 - Backup tự động mỗi giờ và khi khởi động
-"""
 
-    # Additional admin help text
-    admin_help = """
 🛠️ *ADMIN COMMANDS*
 • `/backup` - Tạo bản sao lưu cơ sở dữ liệu thủ công
 • `/restore` - Xem và khôi phục dữ liệu từ bản sao lưu
@@ -811,11 +808,7 @@ def help_command(update, context):
 
     # Replace the DB_PATH placeholder with actual path
     help_text = help_text.replace("{DB_PATH}", DB_PATH)
-    
-    # Add admin help if user is admin
-    if update.effective_user and update.effective_user.id in ADMIN_IDS:
-        help_text += admin_help
-    
+
     update.message.reply_text(help_text, parse_mode='Markdown')
 
 # ====== Admin Commands ======
