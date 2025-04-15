@@ -759,57 +759,66 @@ def help_command(update, context):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 💰 *QUẢN LÝ NỢ*
-• `/adddebt @username <số_tiền> [ghi_chú]` - Ghi nợ cho người dùng
+• /adddebt @username <số_tiền> [ghi_chú] - Ghi nợ cho người dùng
   _Ví dụ: /adddebt @toan 500 Trà sữa_
 
-• `/divide <số_tiền> @user1 @user2 [ghi_chú]` - Chia tiền đều cho những người được chỉ định
+• /divide <số_tiền> @user1 @user2 [ghi_chú] - Chia tiền đều cho những người được chỉ định
   _Ví dụ: /divide 900 @toan @quy @tuan Tiền ăn trưa_
   _Chỉ bao gồm bạn trong phép tính nếu bạn được tag trong lệnh_
 
-• `/cleardebt @username1 [@username2...] [số_tiền]` - Xóa khoản nợ (cho một hoặc nhiều người)
+• /cleardebt @username1 [@username2...] [số_tiền] - Xóa khoản nợ (cho một hoặc nhiều người)
   _Ví dụ: /cleardebt @toan 500_
   _Ví dụ: /cleardebt @toan @quy @tuan 200_
-  _Ví dụ: /cleardebt @toan @quy_ (xóa toàn bộ)
+  _Ví dụ: /cleardebt @toan @quy (xóa toàn bộ)_
 
 📊 *XEM THÔNG TIN*
-• `/summary [@username]` - Xem tổng hợp nợ của bạn (hoặc người khác)
+• /summary [@username] - Xem tổng hợp nợ của bạn (hoặc người khác)
   _Ví dụ: /summary hoặc /summary @toan_
 
-• `/history [@username] [số_lượng]` - Xem lịch sử giao dịch
+• /history [@username] [số_lượng] - Xem lịch sử giao dịch
   _Ví dụ: /history hoặc /history @toan 20_
   
-• `/groupsum` - Xem tổng hợp nợ của cả nhóm (chỉ dùng trong nhóm)
+• /groupsum - Xem tổng hợp nợ của cả nhóm (chỉ dùng trong nhóm)
 
 🔄 *QR CODE*
-• `/setqr <url_hình_ảnh>` - Lưu URL hình ảnh QR code của bạn
+• /setqr <url_hình_ảnh> - Lưu URL hình ảnh QR code của bạn
   _Ví dụ: /setqr https://example.com/myqrcode.jpg_
 
-• `/qr` - Xem QR code của bạn
+• /qr - Xem QR code của bạn
   _Ví dụ: /qr_
 
-• `/get @username qr` - Xem QR code của người khác
+• /get @username qr - Xem QR code của người khác
   _Ví dụ: /get @toan qr_
 
 ⚙️ *CÀI ĐẶT*
-• `/setname @username tên_hiển_thị` - Đặt tên hiển thị
+• /setname @username tên_hiển_thị - Đặt tên hiển thị
   _Ví dụ: /setname @toan Anh Toàn_
 
 💡 *Mẹo*: 
 - QR code có thể là ảnh mã QR thanh toán từ ví điện tử của bạn
-- Dữ liệu được lưu tại: {DB_PATH}
+- Dữ liệu được lưu tại DB
 - Backup tự động mỗi giờ và khi khởi động
-
-🛠️ *ADMIN COMMANDS*
-• `/backup` - Tạo bản sao lưu cơ sở dữ liệu thủ công
-• `/restore` - Xem và khôi phục dữ liệu từ bản sao lưu
-• `/status` - Xem trạng thái hệ thống và thông tin database
-• `/shutdown` - Tắt bot an toàn (tự động backup trước khi tắt)
 """
 
-    # Replace the DB_PATH placeholder with actual path
-    help_text = help_text.replace("{DB_PATH}", DB_PATH)
-
-    update.message.reply_text(help_text, parse_mode='Markdown')
+    # Additional admin help text
+    admin_help = """
+🛠️ *ADMIN COMMANDS*
+• /backup - Tạo bản sao lưu cơ sở dữ liệu thủ công
+• /restore - Xem và khôi phục dữ liệu từ bản sao lưu
+• /status - Xem trạng thái hệ thống và thông tin database
+• /shutdown - Tắt bot an toàn (tự động backup trước khi tắt)
+"""
+    
+    # Add admin help if user is admin
+    if update.effective_user and update.effective_user.id in ADMIN_IDS:
+        help_text += admin_help
+    
+    try:
+        update.message.reply_text(help_text, parse_mode='Markdown')
+    except Exception as e:
+        # If Markdown parsing fails, send without formatting
+        print(f"Error sending help with Markdown: {e}")
+        update.message.reply_text(help_text)
 
 # ====== Admin Commands ======
 
@@ -938,12 +947,12 @@ def status_command(update, context):
 ⏱️ *Uptime*: {int(days)}d {int(hours)}h {int(minutes)}m {int(seconds)}s
 
 💾 *Database*: 
-- Location: `{DB_PATH}`
+- Location: {DB_PATH}
 - Debts: {debt_count} records
 - Names: {name_count} mappings
 
 🔄 *Backups*:
-- Location: `{BACKUP_DIR}`
+- Location: {BACKUP_DIR}
 - Count: {backup_count} backups
 - Auto-backup: Every hour
 
@@ -951,7 +960,12 @@ def status_command(update, context):
 - PID: {os.getpid()}
 - Admin IDs: {ADMIN_IDS}
 """
-        update.message.reply_text(status, parse_mode='Markdown')
+        try:
+            update.message.reply_text(status, parse_mode='Markdown')
+        except Exception as e:
+            # If Markdown parsing fails, send without formatting
+            print(f"Error sending status with Markdown: {e}")
+            update.message.reply_text(status)
     else:
         update.message.reply_text("❌ Only admins can view detailed status.")
 
