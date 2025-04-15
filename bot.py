@@ -8,6 +8,42 @@ import os
 import shutil
 import time
 import threading
+import sys
+import atexit
+
+# Instance check to prevent multiple bots
+def check_instance():
+    pid_file = os.path.join(DB_DIR, 'debtbot.pid')
+    
+    # Check if PID file exists
+    if os.path.isfile(pid_file):
+        with open(pid_file, 'r') as f:
+            old_pid = f.read().strip()
+        
+        # Check if process with this PID is running
+        try:
+            # Try to check if process exists (works on Unix-like systems)
+            os.kill(int(old_pid), 0)
+            print(f"Bot is already running with PID {old_pid}!")
+            print("If you're sure no other instance is running, delete the PID file:")
+            print(f"rm {pid_file}")
+            sys.exit(1)
+        except (OSError, ValueError):
+            # Process not running, we can continue
+            pass
+    
+    # Write our PID
+    with open(pid_file, 'w') as f:
+        f.write(str(os.getpid()))
+    
+    # Register cleanup function to remove PID file on exit
+    def cleanup():
+        try:
+            os.remove(pid_file)
+        except:
+            pass
+    
+    atexit.register(cleanup)
 
 # Set database path - use environment variable or default to data directory
 DB_DIR = os.environ.get('DB_DIR', os.path.join(os.path.expanduser('~'), 'bot_data'))
@@ -19,6 +55,9 @@ os.makedirs(DB_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 print(f"Using database at: {DB_PATH}")
 print(f"Using backup directory: {BACKUP_DIR}")
+
+# Check if another instance is running
+check_instance()
 
 # Backup function
 def backup_database():
@@ -714,6 +753,7 @@ def get_qr(update, context):
         update.message.reply_text(f"❌ Lỗi: {str(e)}")
 
 def help_command(update, context):
+    # Basic help text for all users
     help_text = """
 📋 *HƯỚNG DẪN SỬ DỤNG BOT CHO HỘI NGƯỜI HÈN VN*
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -754,17 +794,27 @@ def help_command(update, context):
 • `/setname @username tên_hiển_thị` - Đặt tên hiển thị
   _Ví dụ: /setname @toan Anh Toàn_
 
-🛠️ *ADMIN COMMANDS*
-• `/backup` - Tạo bản sao lưu cơ sở dữ liệu (chỉ dành cho Admin)
-• `/restore` - Khôi phục cơ sở dữ liệu từ bản sao lưu (chỉ dành cho Admin)
-
 💡 *Mẹo*: 
 - QR code có thể là ảnh mã QR thanh toán từ ví điện tử của bạn
 - Dữ liệu được lưu tại: {DB_PATH}
 - Backup tự động mỗi giờ và khi khởi động
 """
+
+    # Additional admin help text
+    admin_help = """
+🛠️ *ADMIN COMMANDS*
+• `/backup` - Tạo bản sao lưu cơ sở dữ liệu thủ công
+• `/restore` - Xem và khôi phục dữ liệu từ bản sao lưu
+• `/status` - Xem trạng thái hệ thống và thông tin database
+• `/shutdown` - Tắt bot an toàn (tự động backup trước khi tắt)
+"""
+
     # Replace the DB_PATH placeholder with actual path
     help_text = help_text.replace("{DB_PATH}", DB_PATH)
+    
+    # Add admin help if user is admin
+    if update.effective_user and update.effective_user.id in ADMIN_IDS:
+        help_text += admin_help
     
     update.message.reply_text(help_text, parse_mode='Markdown')
 
@@ -846,6 +896,72 @@ def restore_command(update, context):
     except Exception as e:
         update.message.reply_text(f"❌ Error: {str(e)}")
 
+def shutdown_command(update, context):
+    if update.effective_user.id in ADMIN_IDS:
+        update.message.reply_text("⚠️ Shutting down bot. Please wait...")
+        
+        # Perform backup before shutdown
+        if backup_database():
+            update.message.reply_text("✅ Final backup completed.")
+        else:
+            update.message.reply_text("⚠️ Final backup failed, shutting down anyway.")
+            
+        # Schedule shutdown after messages are sent
+        def shutdown():
+            time.sleep(2)  # Wait for messages to be sent
+            updater.stop()
+            updater.is_idle = False
+            
+        threading.Thread(target=shutdown).start()
+    else:
+        update.message.reply_text("❌ Only admins can shut down the bot.")
+
+def status_command(update, context):
+    if update.effective_user.id in ADMIN_IDS:
+        # Get uptime
+        current_time = datetime.now()
+        uptime = current_time - start_time
+        days, remainder = divmod(uptime.total_seconds(), 86400)
+        hours, remainder = divmod(remainder, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        # Get database info
+        conn_status = sqlite3.connect(DB_PATH)
+        c = conn_status.cursor()
+        c.execute("SELECT COUNT(*) FROM debts")
+        debt_count = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM name_mappings")
+        name_count = c.fetchone()[0]
+        conn_status.close()
+        
+        # Get backup info
+        backup_count = len([f for f in os.listdir(BACKUP_DIR) 
+                           if f.startswith("debtbot_backup_") and f.endswith(".db")])
+        
+        # Format message
+        status = f"""
+📊 *BOT STATUS*
+
+⏱️ *Uptime*: {int(days)}d {int(hours)}h {int(minutes)}m {int(seconds)}s
+
+💾 *Database*: 
+- Location: `{DB_PATH}`
+- Debts: {debt_count} records
+- Names: {name_count} mappings
+
+🔄 *Backups*:
+- Location: `{BACKUP_DIR}`
+- Count: {backup_count} backups
+- Auto-backup: Every hour
+
+🤖 *Process*:
+- PID: {os.getpid()}
+- Admin IDs: {ADMIN_IDS}
+"""
+        update.message.reply_text(status, parse_mode='Markdown')
+    else:
+        update.message.reply_text("❌ Only admins can view detailed status.")
+
 # ====== Main Bot Setup ======
 
 def main():
@@ -855,8 +971,31 @@ def main():
     global ADMIN_IDS
     ADMIN_IDS = [1095200180]  # Replace with your Telegram user ID
     
+    # Track start time for uptime calculation
+    global start_time
+    start_time = datetime.now()
+    
+    global updater
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
+
+    # Set up error handler
+    def error_handler(update, context):
+        try:
+            # Log error
+            print(f"Error: {context.error}")
+            
+            # If update is available, send error message to chat
+            if update and update.effective_chat:
+                # Only notify admins about errors
+                if update.effective_user and update.effective_user.id in ADMIN_IDS:
+                    update.effective_message.reply_text(
+                        f"⚠️ An error occurred: {context.error}"
+                    )
+        except:
+            print("Critical error in error handler")
+    
+    dp.add_error_handler(error_handler)
 
     dp.add_handler(CommandHandler("adddebt", add_debt, filters=Filters.chat_type.groups | Filters.chat_type.private))
     dp.add_handler(CommandHandler("summary", summary, filters=Filters.chat_type.groups | Filters.chat_type.private))
@@ -873,6 +1012,8 @@ def main():
     # Admin commands
     dp.add_handler(CommandHandler("backup", backup_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
     dp.add_handler(CommandHandler("restore", restore_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
+    dp.add_handler(CommandHandler("shutdown", shutdown_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
+    dp.add_handler(CommandHandler("status", status_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
 
     print("Bot started. Press Ctrl+C to stop.")
     updater.start_polling()
