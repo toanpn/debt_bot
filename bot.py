@@ -62,23 +62,19 @@ check_instance()
 # Backup function
 def backup_database():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = os.path.join(BACKUP_DIR, f"debtbot_backup_{timestamp}.db")
+    backup_path = os.path.join(BACKUP_DIR, f"debtbot_backup.db")
     
     try:
         # Create a connection to make sure all transactions are saved
         temp_conn = sqlite3.connect(DB_PATH)
+        # Execute VACUUM to defragment the database and ensure integrity
+        temp_conn.execute("VACUUM")
+        # Make sure all changes are committed
+        temp_conn.commit()
         temp_conn.close()
         
         # Copy the database file
         shutil.copy2(DB_PATH, backup_path)
-        
-        # Keep only the most recent backup
-        backups = sorted([os.path.join(BACKUP_DIR, f) for f in os.listdir(BACKUP_DIR) 
-                          if f.startswith("debtbot_backup_") and f.endswith(".db")])
-        
-        if len(backups) > 1:
-            for old_backup in backups[:-1]:
-                os.remove(old_backup)
                 
         print(f"Database backed up to {backup_path}")
         return True
@@ -826,7 +822,7 @@ def backup_command(update, context):
     # Check if user is admin (you can modify this check as needed)
     if update.effective_user.id in ADMIN_IDS:
         if backup_database():
-            update.message.reply_text("✅ Database backed up successfully.")
+            update.message.reply_text("✅ Database backed up successfully to debtbot_backup.db")
         else:
             update.message.reply_text("❌ Backup failed.")
     else:
@@ -838,65 +834,51 @@ def restore_command(update, context):
         update.message.reply_text("❌ Only admins can use this command.")
         return
         
-    # List available backups
+    backup_path = os.path.join(BACKUP_DIR, "debtbot_backup.db")
+    
+    # Check if backup exists
+    if not os.path.exists(backup_path):
+        update.message.reply_text("❌ No backup found.")
+        return
+    
     try:
-        backups = sorted([f for f in os.listdir(BACKUP_DIR) 
-                      if f.startswith("debtbot_backup_") and f.endswith(".db")])
+        # Close current connection
+        global conn, cursor
+        conn.close()
         
-        if not backups:
-            update.message.reply_text("❌ No backups found.")
-            return
-            
-        if not context.args:
-            # Show list of available backups
-            msg = "Available backups:\n\n"
-            for i, backup in enumerate(backups):
-                # Extract timestamp from filename
-                timestamp = backup.replace("debtbot_backup_", "").replace(".db", "")
-                # Format it for display
-                try:
-                    dt = datetime.strptime(timestamp, "%Y%m%d_%H%M%S")
-                    formatted_time = dt.strftime("%d/%m/%Y %H:%M:%S")
-                    msg += f"{i+1}. {formatted_time}\n"
-                except:
-                    msg += f"{i+1}. {timestamp}\n"
-                    
-            msg += "\nUse /restore [number] to restore a backup"
-            update.message.reply_text(msg)
-            return
-            
-        # Parse backup number
-        try:
-            backup_index = int(context.args[0]) - 1
-            if backup_index < 0 or backup_index >= len(backups):
-                update.message.reply_text("❌ Invalid backup number.")
-                return
+        # Get current timestamp for naming
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Rename current database to a temp name
+        temp_db_path = f"{DB_PATH}.{timestamp}.temp"
+        os.rename(DB_PATH, temp_db_path)
+        
+        # Move backup to main DB location
+        shutil.copy2(backup_path, DB_PATH)
+        
+        # Reconnect to DB
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        cursor = conn.cursor()
+        
+        update.message.reply_text(f"✅ Database restored from backup successfully!")
+        
+        # Keep the replaced DB as an emergency backup for 24 hours
+        def remove_temp_db():
+            time.sleep(86400)  # 24 hours
+            if os.path.exists(temp_db_path):
+                os.remove(temp_db_path)
                 
-            backup_file = backups[backup_index]
-            backup_path = os.path.join(BACKUP_DIR, backup_file)
-            
-            # Close current connection
-            global conn, cursor
-            conn.close()
-            
-            # Backup current DB before restoring
-            emergency_backup_path = os.path.join(BACKUP_DIR, f"emergency_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
-            shutil.copy2(DB_PATH, emergency_backup_path)
-            
-            # Restore from backup
-            shutil.copy2(backup_path, DB_PATH)
-            
-            # Reconnect to DB
+        threading.Thread(target=remove_temp_db, daemon=True).start()
+        
+    except Exception as e:
+        update.message.reply_text(f"❌ Restore failed: {str(e)}")
+        
+        # Try to reconnect to the original DB if restore fails
+        try:
             conn = sqlite3.connect(DB_PATH, check_same_thread=False)
             cursor = conn.cursor()
-            
-            update.message.reply_text(f"✅ Database restored from backup: {backup_file}")
-        except ValueError:
-            update.message.reply_text("❌ Please provide a valid backup number.")
-        except Exception as e:
-            update.message.reply_text(f"❌ Restore failed: {str(e)}")
-    except Exception as e:
-        update.message.reply_text(f"❌ Error: {str(e)}")
+        except:
+            update.message.reply_text("⚠️ Failed to reconnect to database. Please restart the bot.")
 
 def shutdown_command(update, context):
     if update.effective_user.id in ADMIN_IDS:
@@ -937,8 +919,8 @@ def status_command(update, context):
         conn_status.close()
         
         # Get backup info
-        backup_count = len([f for f in os.listdir(BACKUP_DIR) 
-                           if f.startswith("debtbot_backup_") and f.endswith(".db")])
+        backup_exists = os.path.exists(os.path.join(BACKUP_DIR, "debtbot_backup.db"))
+        backup_status = "Available" if backup_exists else "Not available"
         
         # Format message
         status = f"""
@@ -953,8 +935,8 @@ def status_command(update, context):
 
 🔄 *Backups*:
 - Location: {BACKUP_DIR}
-- Count: {backup_count} backups
-- Auto-backup: Every hour (keeping only the latest backup)
+- Status: {backup_status}
+- Auto-backup: Every hour (single backup file system)
 
 🤖 *Process*:
 - PID: {os.getpid()}
