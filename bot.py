@@ -220,32 +220,67 @@ def add_debt(update, context):
         if not creditor:
             update.message.reply_text("❌ Bạn cần thiết lập username trên Telegram để sử dụng bot này.")
             return
+        
+        if len(context.args) < 2:
+            update.message.reply_text("❌ Sai cú pháp gòi. Ví dụ: /adddebt 500 @toan [Trà sữa]")
+            return
             
-        debtor = context.args[0].replace('@', '')
-        amount = float(context.args[1])
-        note = " ".join(context.args[2:]) if len(context.args) > 2 else ""
+        # Parse amount (first argument)
+        try:
+            amount = float(context.args[0])
+        except ValueError:
+            update.message.reply_text("❌ Số tiền Khôm hợp lệ. Ví dụ: /adddebt 500 @toan [Trà sữa]")
+            return
+        
+        # Extract debtors (all args starting with @)
+        debtors = []
+        for arg in context.args[1:]:
+            if arg.startswith('@'):
+                debtors.append(arg.replace('@', ''))
+        
+        if not debtors:
+            update.message.reply_text("❌ Vui lòng chỉ định ít nhất một người. Ví dụ: /adddebt 500 @toan [Trà sữa]")
+            return
+            
+        # Extract note (anything after usernames)
+        note_start_idx = 1 + len(debtors)
+        for i in range(1, len(context.args)):
+            if not context.args[i].startswith('@'):
+                note_start_idx = i
+                break
+                
+        note = " ".join(context.args[note_start_idx:]) if note_start_idx < len(context.args) else ""
+            
         timestamp = datetime.now().isoformat()
         
-        if creditor.lower() == debtor.lower():
-            update.message.reply_text("❌ Khôm thể ghi nợ chính mình.")
-            return
-
-        cursor.execute(
-            "INSERT INTO debts (creditor, debtor, amount, note, timestamp, chat_id) VALUES (?, ?, ?, ?, ?, ?)",
-            (creditor, debtor, amount, note, timestamp, chat_id)
-        )
+        results = []
+        for debtor in debtors:
+            if creditor.lower() == debtor.lower():
+                results.append(f"❌ Khôm thể ghi nợ chính mình ({get_display_name(debtor, chat_id)}).")
+                continue
+                
+            cursor.execute(
+                "INSERT INTO debts (creditor, debtor, amount, note, timestamp, chat_id) VALUES (?, ?, ?, ?, ?, ?)",
+                (creditor, debtor, amount, note, timestamp, chat_id)
+            )
+            
+            debtor_display = get_display_name(debtor, chat_id)
+            results.append(f"✅ Đã ghi nợ {debtor_display} {format_money(amount)}" + (f" cho {note}" if note else ""))
+        
         conn.commit()
         
-        creditor_display = get_display_name(creditor, chat_id)
-        debtor_display = get_display_name(debtor, chat_id)
-        
-        update.message.reply_text(
-            f"✅ {creditor_display} đã ghi nợ {debtor_display} {amount} đ" + (f" cho {note}" if note else "")
-        )
+        # Compose response message
+        if len(results) == 1:
+            update.message.reply_text(results[0])
+        else:
+            creditor_display = get_display_name(creditor, chat_id)
+            msg = f"🧾 KẾT QUẢ GHI NỢ TỪ {creditor_display}:\n\n"
+            for result in results:
+                msg += f"{result}\n"
+            update.message.reply_text(msg)
+            
     except IndexError:
-        update.message.reply_text("❌ Sai cú pháp gòi. Ví dụ: /adddebt @toan 500 Trà sữa")
-    except ValueError:
-        update.message.reply_text("❌ Số tiền Khôm hợp lệ. Ví dụ: /adddebt @toan 500 Trà sữa")
+        update.message.reply_text("❌ Sai cú pháp gòi. Ví dụ: /adddebt 500 @toan [Trà sữa]")
     except Exception as e:
         update.message.reply_text(f"❌ Lỗi: {str(e)}")
 
@@ -755,8 +790,9 @@ def help_command(update, context):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 💰 *QUẢN LÝ NỢ*
-• /adddebt @username <số_tiền> [ghi_chú] - Ghi nợ cho người dùng
-  _Ví dụ: /adddebt @toan 500 Trà sữa_
+• /adddebt <số_tiền> @username1 [@username2...] [ghi_chú] - Ghi nợ cho một hoặc nhiều người
+  _Ví dụ: /adddebt 500 @toan Trà sữa_
+  _Ví dụ: /adddebt 10000 @toan @quy @tuan Tiền ăn_
 
 • /divide <số_tiền> @user1 @user2 [ghi_chú] - Chia tiền đều cho những người được chỉ định
   _Ví dụ: /divide 900 @toan @quy @tuan Tiền ăn trưa_
