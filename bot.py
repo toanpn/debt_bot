@@ -9,6 +9,7 @@ import sys
 import atexit
 import time
 import threading
+import shutil
 
 # Set database path - use environment variable or default to data directory
 DB_DIR = os.environ.get('DB_DIR', os.path.join(os.path.expanduser('~'), 'bot_data'))
@@ -16,6 +17,22 @@ DB_PATH = os.path.join(DB_DIR, 'debtbot.db')
 
 # Define your admin user IDs here - moved up for backup functions to use
 ADMIN_IDS = [1095200180]  # Replace with your Telegram user ID
+
+# Define repository directory where backup files might be stored
+REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_DB_PATH = os.path.join(REPO_DIR, 'debtbot.db')
+
+# Check for DB file in repository first
+def check_repository_db():
+    if os.path.exists(REPO_DB_PATH) and os.path.isfile(REPO_DB_PATH):
+        print(f"Found database file in repository: {REPO_DB_PATH}")
+        # Ensure DB_DIR exists
+        os.makedirs(DB_DIR, exist_ok=True)
+        # Copy the repo database file to the standard location
+        shutil.copy2(REPO_DB_PATH, DB_PATH)
+        print(f"Copied database from repository to: {DB_PATH}")
+        return True
+    return False
 
 # Instance check to prevent multiple bots
 def check_instance():
@@ -54,6 +71,9 @@ def check_instance():
 # Ensure directories exist
 os.makedirs(DB_DIR, exist_ok=True)
 print(f"Using database at: {DB_PATH}")
+
+# Check if database exists in repository first
+check_repository_db()
 
 # Check if another instance is running
 check_instance()
@@ -799,6 +819,7 @@ def help_command(update, context):
 🛠️ *ADMIN COMMANDS*
 • /status - Xem trạng thái hệ thống và thông tin database
 • /shutdown - Tắt bot an toàn
+• /backup - Sao lưu database và gửi file về telegram để khôi phục
 """
     
     # Add admin help if user is admin
@@ -870,6 +891,56 @@ def shutdown_command(update, context):
     else:
         update.message.reply_text("❌ Only admins can shut down the bot.")
 
+def backup_database(update, context):
+    if update.effective_user.id not in ADMIN_IDS:
+        update.message.reply_text("❌ Chỉ Admin mới có thể sao lưu database.")
+        return
+        
+    try:
+        # Create timestamp for filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_filename = f"debtbot_backup_{timestamp}.db"
+        backup_path = os.path.join(DB_DIR, backup_filename)
+        
+        # Create backup
+        update.message.reply_text("⏳ Đang tạo bản sao lưu database...")
+        
+        # Close the current connection to ensure all transactions are committed
+        conn.close()
+        
+        # Create a copy of the database file
+        shutil.copy2(DB_PATH, backup_path)
+        
+        # Reopen the database connection
+        global cursor
+        global conn
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        cursor = conn.cursor()
+        
+        # Send file to admin
+        with open(backup_path, 'rb') as backup_file:
+            update.message.reply_document(
+                document=backup_file,
+                filename=backup_filename,
+                caption=f"📦 Database backup - {timestamp}"
+            )
+            
+        # Delete the temporary backup file after sending
+        os.remove(backup_path)
+        
+        # Inform user about manual restore process
+        update.message.reply_text(
+            "✅ Sao lưu hoàn tất!\n\n"
+        )
+    except Exception as e:
+        # Make sure to reopen connection if there was an error
+        try:
+            conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+            cursor = conn.cursor()
+        except:
+            pass
+        update.message.reply_text(f"❌ Lỗi khi sao lưu: {str(e)}")
+
 # ====== Main Bot Setup ======
 
 def main():
@@ -919,6 +990,7 @@ def main():
     # Admin commands
     dp.add_handler(CommandHandler("shutdown", shutdown_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
     dp.add_handler(CommandHandler("status", status_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
+    dp.add_handler(CommandHandler("backup", backup_database, filters=Filters.chat_type.groups | Filters.chat_type.private))
 
     print("Bot started. Press Ctrl+C to stop.")
     updater.start_polling()
