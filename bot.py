@@ -79,90 +79,99 @@ check_repository_db()
 check_instance()
 
 # ====== DB Migration ======
-def migrate_database():
-    print("Performing complete database migration...")
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Create a backup of the debts table
-    try:
-        cursor.execute("CREATE TABLE IF NOT EXISTS debts_backup AS SELECT * FROM debts")
-        cursor.execute("DROP TABLE debts")
-        print("Created backup of debts table")
-    except sqlite3.OperationalError as e:
-        print(f"Backup note: {e}")
-    
-    # Create the new debts table with chat_id
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS debts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        creditor TEXT,
-        debtor TEXT,
-        amount REAL,
-        note TEXT,
-        timestamp TEXT,
-        chat_id INTEGER DEFAULT 0
-    )
-    """)
-    
-    # Copy data from backup to new table
-    try:
-        cursor.execute("""
-        INSERT INTO debts (id, creditor, debtor, amount, note, timestamp, chat_id)
-        SELECT id, creditor, debtor, amount, note, timestamp, 0 FROM debts_backup
-        """)
-        print("Migrated debt data")
-    except sqlite3.OperationalError as e:
-        print(f"Data migration note: {e}")
-    
-    # Create a backup of name_mappings table
-    try:
-        cursor.execute("CREATE TABLE IF NOT EXISTS name_mappings_backup AS SELECT * FROM name_mappings")
-        cursor.execute("DROP TABLE name_mappings")
-        print("Created backup of name_mappings table")
-    except sqlite3.OperationalError as e:
-        print(f"Name backup note: {e}")
-    
-    # Create the new name_mappings table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS name_mappings (
-        username TEXT,
-        display_name TEXT,
-        chat_id INTEGER DEFAULT 0,
-        PRIMARY KEY (username, chat_id)
-    )
-    """)
-    
-    # Copy data from backup to new table
-    try:
-        cursor.execute("""
-        INSERT INTO name_mappings (username, display_name, chat_id)
-        SELECT username, display_name, 0 FROM name_mappings_backup
-        """)
-        print("Migrated name mapping data")
-    except sqlite3.OperationalError as e:
-        print(f"Name data migration note: {e}")
-    
-    # Create QR codes table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS qr_codes (
-        username TEXT,
-        image_url TEXT,
-        chat_id INTEGER,
-        PRIMARY KEY (username, chat_id)
-    )
-    """)
-    
-    conn.commit()
-    conn.close()
-    print("Migration completed")
 
-# Run migration
+def column_exists(cursor, table_name, column_name):
+    """Check if a column exists in a table."""
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    columns = [column[1] for column in cursor.fetchall()]
+    return column_name in columns
+
+def migrate_database():
+    print("Checking database schema...")
+    conn_migrate = sqlite3.connect(DB_PATH)
+    cursor_migrate = conn_migrate.cursor()
+    
+    try:
+        # Ensure debts table exists
+        cursor_migrate.execute("""
+        CREATE TABLE IF NOT EXISTS debts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            creditor TEXT,
+            debtor TEXT,
+            amount REAL,
+            note TEXT,
+            timestamp TEXT,
+            chat_id INTEGER DEFAULT 0
+        )
+        """)
+        
+        # Check if chat_id column exists in debts
+        if not column_exists(cursor_migrate, 'debts', 'chat_id'):
+            print("Adding chat_id column to debts table...")
+            cursor_migrate.execute("ALTER TABLE debts ADD COLUMN chat_id INTEGER DEFAULT 0")
+            print("Added chat_id column to debts.")
+        else:
+            print("debts table schema is up-to-date.")
+
+        # Ensure name_mappings table exists
+        cursor_migrate.execute("""
+        CREATE TABLE IF NOT EXISTS name_mappings (
+            username TEXT,
+            display_name TEXT,
+            chat_id INTEGER DEFAULT 0,
+            PRIMARY KEY (username, chat_id)
+        )
+        """)
+        
+        # Check if chat_id column exists in name_mappings
+        if not column_exists(cursor_migrate, 'name_mappings', 'chat_id'):
+            print("Adding chat_id column to name_mappings table...")
+            # Need to handle potential primary key conflicts - easiest is usually recreate
+            print("Recreating name_mappings table for schema update...")
+            cursor_migrate.execute("CREATE TABLE name_mappings_temp AS SELECT username, display_name, 0 as chat_id FROM name_mappings")
+            cursor_migrate.execute("DROP TABLE name_mappings")
+            cursor_migrate.execute("""
+            CREATE TABLE name_mappings (
+                username TEXT,
+                display_name TEXT,
+                chat_id INTEGER DEFAULT 0,
+                PRIMARY KEY (username, chat_id)
+            )
+            """)
+            cursor_migrate.execute("INSERT INTO name_mappings (username, display_name, chat_id) SELECT username, display_name, chat_id FROM name_mappings_temp")
+            cursor_migrate.execute("DROP TABLE name_mappings_temp")
+            print("Recreated name_mappings table with chat_id.")
+        else:
+            print("name_mappings table schema is up-to-date.")
+
+        # Ensure qr_codes table exists
+        cursor_migrate.execute("""
+        CREATE TABLE IF NOT EXISTS qr_codes (
+            username TEXT,
+            image_url TEXT,
+            chat_id INTEGER,
+            PRIMARY KEY (username, chat_id)
+        )
+        """)
+        print("qr_codes table schema checked.")
+        
+        conn_migrate.commit()
+        print("Database schema check completed.")
+        
+    except sqlite3.Error as e:
+        print(f"Database migration error: {e}")
+    finally:
+        conn_migrate.close()
+
+# Run migration check
 migrate_database()
 
 # ====== DB Setup ======
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 cursor = conn.cursor()
+
+# These CREATE TABLE IF NOT EXISTS calls are now somewhat redundant 
+# because migrate_database ensures they exist, but leaving them is harmless.
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS debts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
