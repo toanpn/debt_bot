@@ -11,6 +11,14 @@ import threading
 import sys
 import atexit
 
+# Set database path - use environment variable or default to data directory
+DB_DIR = os.environ.get('DB_DIR', os.path.join(os.path.expanduser('~'), 'bot_data'))
+DB_PATH = os.environ.get('DB_PATH', os.path.join(DB_DIR, 'debtbot.db'))
+BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(DB_DIR, 'backups'))
+
+# Define your admin user IDs here - moved up for backup functions to use
+ADMIN_IDS = [1095200180]  # Replace with your Telegram user ID
+
 # Instance check to prevent multiple bots
 def check_instance():
     pid_file = os.path.join(DB_DIR, 'debtbot.pid')
@@ -45,24 +53,22 @@ def check_instance():
     
     atexit.register(cleanup)
 
-# Set database path - use environment variable or default to data directory
-DB_DIR = os.environ.get('DB_DIR', os.path.join(os.path.expanduser('~'), 'bot_data'))
-DB_PATH = os.environ.get('DB_PATH', os.path.join(DB_DIR, 'debtbot.db'))
-BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(DB_DIR, 'backups'))
-
 # Ensure directories exist
 os.makedirs(DB_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 print(f"Using database at: {DB_PATH}")
 print(f"Using backup directory: {BACKUP_DIR}")
 
+# Global updater variable for backup function to use
+updater = None
+
 # Check if another instance is running
 check_instance()
 
-# Backup function
+# Backup function - now sends to Telegram instead of just local storage
 def backup_database():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = os.path.join(BACKUP_DIR, f"debtbot_backup.db")
+    backup_path = os.path.join(BACKUP_DIR, f"debtbot_backup_{timestamp}.db")
     
     try:
         # Create a connection to make sure all transactions are saved
@@ -75,6 +81,22 @@ def backup_database():
         
         # Copy the database file
         shutil.copy2(DB_PATH, backup_path)
+        
+        # If updater is initialized, send the file to admin
+        if updater:
+            try:
+                # Send the database file to the first admin in ADMIN_IDS
+                with open(backup_path, 'rb') as file:
+                    for admin_id in ADMIN_IDS:
+                        updater.bot.send_document(
+                            chat_id=admin_id,
+                            document=file,
+                            filename=f"debtbot_backup_{timestamp}.db",
+                            caption=f"Database backup {timestamp}"
+                        )
+                print(f"Database backup sent to admin(s) via Telegram")
+            except Exception as e:
+                print(f"Failed to send backup via Telegram: {str(e)}")
                 
         print(f"Database backed up to {backup_path}")
         return True
@@ -694,7 +716,7 @@ def divide_expense(update, context):
             )
         
         if debtor_names:
-            message += f"👥 Người nợ: {debtor_list}\n"
+            message += f" Người nợ: {debtor_list}\n"
             
         if note and note != "Chia tiền":
             message += f"📝 Ghi chú: {note}"
@@ -835,10 +857,15 @@ def help_command(update, context):
     # Additional admin help text
     admin_help = """
 🛠️ *ADMIN COMMANDS*
-• /backup - Tạo bản sao lưu cơ sở dữ liệu thủ công
-• /restore - Xem và khôi phục dữ liệu từ bản sao lưu
+• /backup - Tạo bản sao lưu cơ sở dữ liệu và gửi qua Telegram
+• /restore - Khôi phục dữ liệu từ file sao lưu (reply vào file .db)
 • /status - Xem trạng thái hệ thống và thông tin database
 • /shutdown - Tắt bot an toàn (tự động backup trước khi tắt)
+
+💾 *Cách sao lưu & khôi phục*:
+1. Sử dụng lệnh /backup để nhận file sao lưu qua Telegram
+2. Lưu file này ở nơi an toàn
+3. Để khôi phục: gửi file sao lưu cho bot và reply bằng lệnh /restore
 """
     
     # Add admin help if user is admin
@@ -855,12 +882,13 @@ def help_command(update, context):
 # ====== Admin Commands ======
 
 def backup_command(update, context):
-    # Check if user is admin (you can modify this check as needed)
+    # Check if user is admin
     if update.effective_user.id in ADMIN_IDS:
+        update.message.reply_text("⏳ Creating and sending database backup...")
         if backup_database():
-            update.message.reply_text("✅ Database backed up successfully to debtbot_backup.db")
+            update.message.reply_text("✅ Database backup successfully created and sent to admin(s)")
         else:
-            update.message.reply_text("❌ Backup failed.")
+            update.message.reply_text("❌ Backup failed. Check logs for details.")
     else:
         update.message.reply_text("❌ Only admins can use this command.")
 
@@ -869,60 +897,82 @@ def restore_command(update, context):
     if update.effective_user.id not in ADMIN_IDS:
         update.message.reply_text("❌ Only admins can use this command.")
         return
-        
-    backup_path = os.path.join(BACKUP_DIR, "debtbot_backup.db")
     
-    # Check if backup exists
-    if not os.path.exists(backup_path):
-        update.message.reply_text("❌ No backup found.")
-        return
-    
-    try:
-        # Close current connection
-        global conn, cursor
-        conn.close()
+    # Check if a file was attached to the message
+    if update.message.reply_to_message and update.message.reply_to_message.document:
+        doc = update.message.reply_to_message.document
         
-        # Get current timestamp for naming
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Check if the file looks like a SQLite database
+        if not doc.file_name.endswith('.db'):
+            update.message.reply_text("❌ The file doesn't seem to be a database backup (.db file).")
+            return
+            
+        update.message.reply_text("⏳ Downloading backup file...")
         
-        # Rename current database to a temp name
-        temp_db_path = f"{DB_PATH}.{timestamp}.temp"
-        os.rename(DB_PATH, temp_db_path)
-        
-        # Move backup to main DB location
-        shutil.copy2(backup_path, DB_PATH)
-        
-        # Reconnect to DB
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        cursor = conn.cursor()
-        
-        update.message.reply_text(f"✅ Database restored from backup successfully!")
-        
-        # Keep the replaced DB as an emergency backup for 24 hours
-        def remove_temp_db():
-            time.sleep(86400)  # 24 hours
-            if os.path.exists(temp_db_path):
-                os.remove(temp_db_path)
-                
-        threading.Thread(target=remove_temp_db, daemon=True).start()
-        
-    except Exception as e:
-        update.message.reply_text(f"❌ Restore failed: {str(e)}")
-        
-        # Try to reconnect to the original DB if restore fails
         try:
+            # Download the file
+            file = context.bot.get_file(doc.file_id)
+            backup_path = os.path.join(BACKUP_DIR, "debtbot_restore_temp.db")
+            file.download(backup_path)
+            
+            # Verify it's a valid SQLite database
+            try:
+                test_conn = sqlite3.connect(backup_path)
+                test_cursor = test_conn.cursor()
+                test_cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tables = [table[0] for table in test_cursor.fetchall()]
+                if 'debts' not in tables or 'name_mappings' not in tables:
+                    update.message.reply_text("❌ This file doesn't seem to be a valid DebtBot database backup.")
+                    os.remove(backup_path)
+                    return
+                test_conn.close()
+            except:
+                update.message.reply_text("❌ Invalid SQLite database file.")
+                os.remove(backup_path)
+                return
+                
+            # Close current connection
+            global conn, cursor
+            conn.close()
+            
+            # Backup current database before replacing it
+            current_backup = os.path.join(BACKUP_DIR, f"debtbot_prerestore_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
+            shutil.copy2(DB_PATH, current_backup)
+            
+            # Replace the database with the backup
+            shutil.copy2(backup_path, DB_PATH)
+            
+            # Clean up the temp file
+            os.remove(backup_path)
+            
+            # Reconnect to the newly restored database
             conn = sqlite3.connect(DB_PATH, check_same_thread=False)
             cursor = conn.cursor()
-        except:
-            update.message.reply_text("⚠️ Failed to reconnect to database. Please restart the bot.")
+            
+            update.message.reply_text("✅ Database successfully restored from the provided backup file!")
+            
+        except Exception as e:
+            update.message.reply_text(f"❌ Error during restore: {str(e)}")
+            # Try to reconnect to the original database
+            try:
+                conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+                cursor = conn.cursor()
+            except:
+                update.message.reply_text("⚠️ Failed to reconnect to database. Please restart the bot.")
+    else:
+        # If no file was attached, explain how to use the command
+        update.message.reply_text(
+            "To restore from a backup, reply to a database backup file with /restore\n\n"
+            "Example: Forward a previous backup file to this chat, then reply to it with /restore"
+        )
 
 def shutdown_command(update, context):
     if update.effective_user.id in ADMIN_IDS:
-        update.message.reply_text("⚠️ Shutting down bot. Please wait...")
+        update.message.reply_text("⚠️ Shutting down bot. Creating final backup...")
         
         # Perform backup before shutdown
         if backup_database():
-            update.message.reply_text("✅ Final backup completed.")
+            update.message.reply_text("✅ Final backup completed and sent via Telegram.")
         else:
             update.message.reply_text("⚠️ Final backup failed, shutting down anyway.")
             
@@ -992,15 +1042,13 @@ def status_command(update, context):
 def main():
     TOKEN = "8123653342:AAG-5S6fP_47KgNMYmjyH351xKvpXr1lVG0"  # <-- Bệ hạ nhớ dán token bot ở đây
     
-    # Define your admin user IDs here
-    global ADMIN_IDS
-    ADMIN_IDS = [1095200180]  # Replace with your Telegram user ID
+    # Set global updater and admin IDs
+    global updater, ADMIN_IDS
     
     # Track start time for uptime calculation
     global start_time
     start_time = datetime.now()
     
-    global updater
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
 
@@ -1022,6 +1070,7 @@ def main():
     
     dp.add_error_handler(error_handler)
 
+    # Regular commands
     dp.add_handler(CommandHandler("adddebt", add_debt, filters=Filters.chat_type.groups | Filters.chat_type.private))
     dp.add_handler(CommandHandler("summary", summary, filters=Filters.chat_type.groups | Filters.chat_type.private))
     dp.add_handler(CommandHandler("cleardebt", clear_debt, filters=Filters.chat_type.groups | Filters.chat_type.private))
@@ -1039,6 +1088,9 @@ def main():
     dp.add_handler(CommandHandler("restore", restore_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
     dp.add_handler(CommandHandler("shutdown", shutdown_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
     dp.add_handler(CommandHandler("status", status_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
+
+    # Run initial backup after bot starts
+    threading.Timer(10, backup_database).start()  # Wait 10 seconds for bot to fully start
 
     print("Bot started. Press Ctrl+C to stop.")
     updater.start_polling()
