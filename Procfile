@@ -1,1 +1,1 @@
-﻿web: python bot.py
+﻿web: mkdir -p $DB_DIR && python bot.py

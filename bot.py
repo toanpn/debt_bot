@@ -71,6 +71,9 @@ def backup_database():
     backup_path = os.path.join(BACKUP_DIR, f"debtbot_backup_{timestamp}.db")
     
     try:
+        # Ensure backup directory exists
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+        
         # Create a connection to make sure all transactions are saved
         temp_conn = sqlite3.connect(DB_PATH)
         # Execute VACUUM to defragment the database and ensure integrity
@@ -84,19 +87,29 @@ def backup_database():
         
         # If updater is initialized, send the file to admin
         if updater:
+            sent_successfully = False
             try:
-                # Send the database file to the first admin in ADMIN_IDS
-                with open(backup_path, 'rb') as file:
-                    for admin_id in ADMIN_IDS:
-                        updater.bot.send_document(
-                            chat_id=admin_id,
-                            document=file,
-                            filename=f"debtbot_backup_{timestamp}.db",
-                            caption=f"Database backup {timestamp}"
-                        )
-                print(f"Database backup sent to admin(s) via Telegram")
+                # Send the database file to the admins in ADMIN_IDS
+                for admin_id in ADMIN_IDS:
+                    try:
+                        with open(backup_path, 'rb') as file:
+                            updater.bot.send_document(
+                                chat_id=admin_id,
+                                document=file,
+                                filename=f"debtbot_backup_{timestamp}.db",
+                                caption=f"Database backup {timestamp}"
+                            )
+                        sent_successfully = True
+                        print(f"Database backup sent to admin {admin_id} via Telegram")
+                    except Exception as e:
+                        print(f"Failed to send backup to admin {admin_id}: {str(e)}")
             except Exception as e:
                 print(f"Failed to send backup via Telegram: {str(e)}")
+                
+            if sent_successfully:
+                print("Database backup sent to at least one admin")
+            else:
+                print("Failed to send backup to any admin")
                 
         print(f"Database backed up to {backup_path}")
         return True
@@ -716,7 +729,7 @@ def divide_expense(update, context):
             )
         
         if debtor_names:
-            message += f" Người nợ: {debtor_list}\n"
+            message += f"👥 Người nợ: {debtor_list}\n"
             
         if note and note != "Chia tiền":
             message += f"📝 Ghi chú: {note}"
@@ -910,10 +923,23 @@ def restore_command(update, context):
         update.message.reply_text("⏳ Downloading backup file...")
         
         try:
-            # Download the file
-            file = context.bot.get_file(doc.file_id)
+            # Create directory if it doesn't exist
+            os.makedirs(BACKUP_DIR, exist_ok=True)
+            
+            # Download the file - fixed method to handle file downloads properly
             backup_path = os.path.join(BACKUP_DIR, "debtbot_restore_temp.db")
-            file.download(backup_path)
+            file = context.bot.get_file(doc.file_id)
+            
+            # Direct file download with requests
+            response = requests.get(file.file_path)
+            if response.status_code != 200:
+                update.message.reply_text(f"❌ Failed to download file: HTTP {response.status_code}")
+                return
+                
+            with open(backup_path, 'wb') as f:
+                f.write(response.content)
+                
+            update.message.reply_text("✅ Backup file downloaded, verifying...")
             
             # Verify it's a valid SQLite database
             try:
@@ -926,8 +952,8 @@ def restore_command(update, context):
                     os.remove(backup_path)
                     return
                 test_conn.close()
-            except:
-                update.message.reply_text("❌ Invalid SQLite database file.")
+            except Exception as e:
+                update.message.reply_text(f"❌ Invalid SQLite database file: {str(e)}")
                 os.remove(backup_path)
                 return
                 
@@ -953,6 +979,7 @@ def restore_command(update, context):
             
         except Exception as e:
             update.message.reply_text(f"❌ Error during restore: {str(e)}")
+            print(f"Restore error: {str(e)}")
             # Try to reconnect to the original database
             try:
                 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
