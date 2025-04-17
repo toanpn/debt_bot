@@ -10,7 +10,6 @@ import atexit
 import time
 import threading
 
-
 # Set database path - use environment variable or default to data directory
 DB_DIR = os.environ.get('DB_DIR', os.path.join(os.path.expanduser('~'), 'bot_data'))
 DB_PATH = os.path.join(DB_DIR, 'debtbot.db')
