@@ -892,6 +892,8 @@ def shutdown_command(update, context):
         update.message.reply_text("❌ Only admins can shut down the bot.")
 
 def backup_database(update, context):
+    global cursor, conn
+    
     if update.effective_user.id not in ADMIN_IDS:
         update.message.reply_text("❌ Chỉ Admin mới có thể sao lưu database.")
         return
@@ -912,8 +914,6 @@ def backup_database(update, context):
         shutil.copy2(DB_PATH, backup_path)
         
         # Reopen the database connection
-        global cursor
-        global conn
         conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         cursor = conn.cursor()
         
