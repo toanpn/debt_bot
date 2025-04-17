@@ -202,7 +202,7 @@ def add_debt(update, context):
                 debtors.append(arg.replace('@', ''))
         
         if not debtors:
-            update.message.reply_text("❌ Vui lòng chỉ định ít nhất một người. Ví dụ: /adddebt 500 @toan [Trà sữa]")
+            update.message.reply_text("❌ Vui lòng chỉ định ít nhất một người nhé. Ví dụ: /adddebt 500 @toan [Trà sữa]")
             return
             
         # Extract note (anything after usernames)
