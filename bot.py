@@ -13,8 +13,8 @@ import atexit
 
 # Set database path - use environment variable or default to data directory
 DB_DIR = os.environ.get('DB_DIR', os.path.join(os.path.expanduser('~'), 'bot_data'))
-DB_PATH = os.environ.get('DB_PATH', os.path.join(DB_DIR, 'debtbot.db'))
-BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(DB_DIR, 'backups'))
+DB_PATH = os.path.join(DB_DIR, 'debtbot.db')
+BACKUP_DIR = os.path.join(DB_DIR, 'backups')
 
 # Define your admin user IDs here - moved up for backup functions to use
 ADMIN_IDS = [1095200180]  # Replace with your Telegram user ID
@@ -65,7 +65,7 @@ updater = None
 # Check if another instance is running
 check_instance()
 
-# Backup function - now sends to Telegram instead of just local storage
+# Backup function - now works with Railway mounted volume
 def backup_database():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = os.path.join(BACKUP_DIR, f"debtbot_backup_{timestamp}.db")
@@ -84,6 +84,24 @@ def backup_database():
         
         # Copy the database file
         shutil.copy2(DB_PATH, backup_path)
+        
+        # Keep only the 10 most recent backups in the mounted volume
+        try:
+            all_backups = sorted([
+                os.path.join(BACKUP_DIR, f) for f in os.listdir(BACKUP_DIR) 
+                if f.startswith("debtbot_backup_") and f.endswith(".db")
+            ])
+            
+            # If we have more than 10 backups, remove the oldest ones
+            if len(all_backups) > 10:
+                for old_backup in all_backups[:-10]:
+                    try:
+                        os.remove(old_backup)
+                        print(f"Removed old backup: {old_backup}")
+                    except:
+                        pass
+        except Exception as e:
+            print(f"Error managing backup rotation: {str(e)}")
         
         # If updater is initialized, send the file to admin
         if updater:
@@ -1057,9 +1075,17 @@ def status_command(update, context):
         name_count = c.fetchone()[0]
         conn_status.close()
         
-        # Get backup info
-        backup_exists = os.path.exists(os.path.join(BACKUP_DIR, "debtbot_backup.db"))
-        backup_status = "Available" if backup_exists else "Not available"
+        # Get backup info from mounted volume
+        backup_count = 0
+        latest_backup = "None"
+        try:
+            backups = [f for f in os.listdir(BACKUP_DIR) 
+                      if f.startswith("debtbot_backup_") and f.endswith(".db")]
+            backup_count = len(backups)
+            if backups:
+                latest_backup = sorted(backups)[-1]
+        except Exception as e:
+            print(f"Error checking backups: {str(e)}")
         
         # Format message
         status = f"""
@@ -1073,9 +1099,10 @@ def status_command(update, context):
 - Names: {name_count} mappings
 
 🔄 *Backups*:
-- Location: {BACKUP_DIR}
-- Status: {backup_status}
-- Auto-backup: Every hour (single backup file system)
+- Location: {BACKUP_DIR} (Railway mounted volume)
+- Count: {backup_count} backups in rotation
+- Latest: {latest_backup}
+- Policy: Keeping 10 most recent backups
 
 🤖 *Process*:
 - PID: {os.getpid()}
