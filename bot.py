@@ -1,5 +1,5 @@
 import sqlite3
-from telegram.ext import Updater, CommandHandler, Filters
+from telegram.ext import Updater, CommandHandler, Filters, MessageHandler
 from datetime import datetime
 import math
 import requests
@@ -906,14 +906,27 @@ def backup_command(update, context):
         update.message.reply_text("❌ Only admins can use this command.")
 
 def restore_command(update, context):
+    print(f"Restore command received from user {update.effective_user.id}")
+    
     # Check if user is admin
     if update.effective_user.id not in ADMIN_IDS:
         update.message.reply_text("❌ Only admins can use this command.")
         return
     
+    # Add debugging to see if there's a reply and what type it is
+    if update.message.reply_to_message:
+        print(f"Reply detected to message type: {type(update.message.reply_to_message)}")
+        if update.message.reply_to_message.document:
+            print(f"Document found in reply: {update.message.reply_to_message.document.file_name}")
+        else:
+            print("No document in reply")
+    else:
+        print("No reply_to_message found")
+    
     # Check if a file was attached to the message
     if update.message.reply_to_message and update.message.reply_to_message.document:
         doc = update.message.reply_to_message.document
+        print(f"Processing document: {doc.file_name}, size: {doc.file_size}, mime type: {doc.mime_type}")
         
         # Check if the file looks like a SQLite database
         if not doc.file_name.endswith('.db'):
@@ -925,69 +938,95 @@ def restore_command(update, context):
         try:
             # Create directory if it doesn't exist
             os.makedirs(BACKUP_DIR, exist_ok=True)
+            print(f"Backup directory confirmed: {BACKUP_DIR}")
             
             # Download the file - fixed method to handle file downloads properly
             backup_path = os.path.join(BACKUP_DIR, "debtbot_restore_temp.db")
-            file = context.bot.get_file(doc.file_id)
+            print(f"Getting file ID: {doc.file_id}")
             
-            # Direct file download with requests
-            response = requests.get(file.file_path)
-            if response.status_code != 200:
-                update.message.reply_text(f"❌ Failed to download file: HTTP {response.status_code}")
+            try:
+                file = context.bot.get_file(doc.file_id)
+                print(f"File path from Telegram: {file.file_path}")
+                
+                # Direct file download with requests
+                response = requests.get(file.file_path)
+                print(f"Download response status: {response.status_code}")
+                
+                if response.status_code != 200:
+                    update.message.reply_text(f"❌ Failed to download file: HTTP {response.status_code}")
+                    return
+                    
+                print(f"Writing {len(response.content)} bytes to {backup_path}")
+                with open(backup_path, 'wb') as f:
+                    f.write(response.content)
+                
+                print("File downloaded successfully")
+                update.message.reply_text("✅ Backup file downloaded, verifying...")
+            except Exception as download_error:
+                print(f"Error downloading file: {str(download_error)}")
+                update.message.reply_text(f"❌ Failed to download file: {str(download_error)}")
                 return
-                
-            with open(backup_path, 'wb') as f:
-                f.write(response.content)
-                
-            update.message.reply_text("✅ Backup file downloaded, verifying...")
             
             # Verify it's a valid SQLite database
             try:
+                print("Verifying SQLite database")
                 test_conn = sqlite3.connect(backup_path)
                 test_cursor = test_conn.cursor()
                 test_cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
                 tables = [table[0] for table in test_cursor.fetchall()]
+                print(f"Found tables: {tables}")
+                
                 if 'debts' not in tables or 'name_mappings' not in tables:
                     update.message.reply_text("❌ This file doesn't seem to be a valid DebtBot database backup.")
                     os.remove(backup_path)
                     return
                 test_conn.close()
+                print("Database verification successful")
             except Exception as e:
+                print(f"Database verification error: {str(e)}")
                 update.message.reply_text(f"❌ Invalid SQLite database file: {str(e)}")
                 os.remove(backup_path)
                 return
                 
             # Close current connection
             global conn, cursor
+            print("Closing current database connection")
             conn.close()
             
             # Backup current database before replacing it
             current_backup = os.path.join(BACKUP_DIR, f"debtbot_prerestore_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
+            print(f"Backing up current database to {current_backup}")
             shutil.copy2(DB_PATH, current_backup)
             
             # Replace the database with the backup
+            print(f"Replacing main database with restore file")
             shutil.copy2(backup_path, DB_PATH)
             
             # Clean up the temp file
+            print("Removing temporary file")
             os.remove(backup_path)
             
             # Reconnect to the newly restored database
+            print("Reconnecting to restored database")
             conn = sqlite3.connect(DB_PATH, check_same_thread=False)
             cursor = conn.cursor()
             
+            print("Restore completed successfully")
             update.message.reply_text("✅ Database successfully restored from the provided backup file!")
             
         except Exception as e:
-            update.message.reply_text(f"❌ Error during restore: {str(e)}")
             print(f"Restore error: {str(e)}")
+            update.message.reply_text(f"❌ Error during restore: {str(e)}")
             # Try to reconnect to the original database
             try:
                 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
                 cursor = conn.cursor()
-            except:
+            except Exception as reconnect_error:
+                print(f"Failed to reconnect to database: {str(reconnect_error)}")
                 update.message.reply_text("⚠️ Failed to reconnect to database. Please restart the bot.")
     else:
         # If no file was attached, explain how to use the command
+        print("No document found in reply")
         update.message.reply_text(
             "To restore from a backup, reply to a database backup file with /restore\n\n"
             "Example: Forward a previous backup file to this chat, then reply to it with /restore"
@@ -1097,6 +1136,17 @@ def main():
     
     dp.add_error_handler(error_handler)
 
+    # Function to handle database file uploads
+    def handle_document(update, context):
+        # Only process for admins
+        if update.effective_user.id not in ADMIN_IDS:
+            return
+            
+        if update.message.document and update.message.document.file_name.endswith('.db'):
+            update.message.reply_text(
+                "This appears to be a database file. To restore from this backup, reply to this file with /restore"
+            )
+    
     # Regular commands
     dp.add_handler(CommandHandler("adddebt", add_debt, filters=Filters.chat_type.groups | Filters.chat_type.private))
     dp.add_handler(CommandHandler("summary", summary, filters=Filters.chat_type.groups | Filters.chat_type.private))
@@ -1115,6 +1165,9 @@ def main():
     dp.add_handler(CommandHandler("restore", restore_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
     dp.add_handler(CommandHandler("shutdown", shutdown_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
     dp.add_handler(CommandHandler("status", status_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
+    
+    # Handler for DB file uploads
+    dp.add_handler(MessageHandler(Filters.document, handle_document))
 
     # Run initial backup after bot starts
     threading.Timer(10, backup_database).start()  # Wait 10 seconds for bot to fully start
