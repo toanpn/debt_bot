@@ -1,1 +1,1 @@
-﻿web: mkdir -p ${DB_DIR:-./data} && python bot.py
+﻿web: mkdir -p ${DB_DIR:-./data} && python -m bot.py
