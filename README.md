@@ -1,6 +1,6 @@
 # Debt Bot
 
-A Telegram bot for tracking debts among friends and groups with natural language support using Google's Gemini AI.
+A Telegram bot for tracking debts among friends and groups with natural language support using AI models like Google's Gemini or X.AI's Grok.
 
 ## Features
 
@@ -12,9 +12,10 @@ A Telegram bot for tracking debts among friends and groups with natural language
 - 📱 Set and display QR codes for payments
 - 🔄 Clear debts with other users
 - 👤 Set custom display names
-- 🤖 Natural language processing using Google Gemini AI
+- 🤖 Natural language processing using AI (Gemini or Grok)
 - 📦 Database backup and restoration
 - 💾 Multi-group support with data isolation
+- 🔄 Support for multiple AI models with easy switching
 
 ## Commands
 
@@ -61,6 +62,7 @@ A Telegram bot for tracking debts among friends and groups with natural language
 - `/status` - View system status and database information
 - `/shutdown` - Safely shut down the bot
 - `/backup` - Back up database and send the file via Telegram
+- `/switchmodel <model_name>` - Switch between AI models (gemini or grok)
 
 ## Setup
 
@@ -68,6 +70,24 @@ A Telegram bot for tracking debts among friends and groups with natural language
 - `TOKEN` - Your Telegram bot token
 - `DB_DIR` - Directory to store the database (defaults to ~/bot_data)
 - `GOOGLE_API_KEY` - Google API key for Gemini AI integration
+- `GROK_API_KEY` - X.AI API key for Grok AI integration
+- `MODEL_CHOICE` - AI model to use (default: "gemini", options: "gemini" or "grok")
+- `ADMIN_IDS` - Comma-separated Fixed in code, list of Telegram user IDs with admin privileges
+
+### AI Model Configuration
+The bot supports multiple AI models for natural language processing:
+
+1. **Gemini** (default)
+   - Requires `GOOGLE_API_KEY` environment variable
+   - Uses Google's Gemini 2.0 Flash model
+   - Set with `MODEL_CHOICE=gemini`
+
+2. **Grok**
+   - Requires `GROK_API_KEY` environment variable
+   - Uses X.AI's Grok-3-mini-beta model
+   - Set with `MODEL_CHOICE=grok`
+
+Admins can switch models during runtime using the `/switchmodel` command.
 
 ### Database
 The bot uses SQLite for data storage with the following tables:
@@ -98,7 +118,12 @@ The bot supports natural language commands when mentioned. For example:
 - "@DebtBot split 90k between me, @quy and @tuan"
 - "@DebtBot how much do I owe?"
 
-The bot will analyze the intent using Gemini AI and execute the appropriate command.
+The bot will analyze the intent using the configured AI model and execute the appropriate command. The natural language processing includes:
+
+- Pattern matching for common commands
+- AI-powered intent recognition for complex requests
+- Conversational responses for non-debt-related questions
+- Vietnamese language support with cultural references
 
 ## Data Backup
 
