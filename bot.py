@@ -953,7 +953,7 @@ def backup_database(update, context):
 # ====== Main Bot Setup ======
 
 def main():
-    TOKEN = "abcxyz"  
+    TOKEN = os.getenv("TOKEN") 
     
     # Set global updater and admin IDs
     global updater, ADMIN_IDS
