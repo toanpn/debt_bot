@@ -953,7 +953,7 @@ def backup_database(update, context):
 # ====== Main Bot Setup ======
 
 def main():
-    TOKEN = "8123653342:AAG-5S6fP_47KgNMYmjyH351xKvpXr1lVG0"  # <-- Bệ hạ nhớ dán token bot ở đây
+    TOKEN = "abcxyz"  
     
     # Set global updater and admin IDs
     global updater, ADMIN_IDS
