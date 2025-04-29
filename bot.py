@@ -13,10 +13,81 @@ import threading
 import shutil
 import google.generativeai as genai
 import re
+import json
 
-# Set up Gemini API
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-model = genai.GenerativeModel('gemini-2.0-flash')
+# ====== Model Configuration ======
+# Model selection - default to gemini if not specified
+MODEL_CHOICE = os.environ.get('MODEL_CHOICE', 'gemini').lower()
+
+# Wrapper class for different LLM models
+class LLMWrapper:
+    def __init__(self):
+        self.model_name = MODEL_CHOICE
+        
+        # Initialize the selected model
+        if self.model_name == 'gemini':
+            # Set up Gemini API
+            genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+            self.model = genai.GenerativeModel('gemini-2.0-flash')
+            print(f"Using Gemini model: gemini-2.0-flash")
+        elif self.model_name == 'grok':
+            # Set up Grok API
+            self.grok_api_key = os.getenv("GROK_API_KEY")
+            self.grok_api_url = "https://api.x.ai/v1/chat/completions"
+            self.model_id = "grok-3-mini-beta"
+            print(f"Using Grok model: {self.model_id}")
+        else:
+            # Default to Gemini if unknown model specified
+            print(f"Unknown model '{self.model_name}', defaulting to Gemini")
+            self.model_name = 'gemini'
+            genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+            self.model = genai.GenerativeModel('gemini-2.0-flash')
+    
+    def generate_content(self, prompt):
+        """Generate content from the selected model with a common interface"""
+        if self.model_name == 'gemini':
+            # Use Gemini's native API
+            return self.model.generate_content(prompt)
+        elif self.model_name == 'grok':
+            # Use Grok API via requests
+            try:
+                headers = {
+                    "Authorization": f"Bearer {self.grok_api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                data = {
+                    "model": self.model_id,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.7
+                }
+                
+                response = requests.post(
+                    self.grok_api_url, 
+                    headers=headers,
+                    json=data
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    # Create a response object similar to Gemini's for consistency
+                    class GrokResponse:
+                        def __init__(self, text):
+                            self.text = text
+                    
+                    return GrokResponse(result['choices'][0]['message']['content'])
+                else:
+                    print(f"Grok API error: {response.status_code}, {response.text}")
+                    return None
+            except Exception as e:
+                print(f"Error calling Grok API: {e}")
+                return None
+        
+        # Fallback for unknown models
+        return None
+
+# Initialize the LLM wrapper
+llm = LLMWrapper()
 
 # Set database path - use environment variable or default to data directory
 DB_DIR = os.environ.get('DB_DIR', os.path.join(os.path.expanduser('~'), 'bot_data'))
@@ -702,6 +773,91 @@ def divide_expense(update, context):
     except Exception as e:
         update.message.reply_text(f"❌ Lỗi: {str(e)}")
 
+def switch_model(update, context):
+    try:
+        chat_id = update.effective_chat.id
+        user = update.message.from_user.username
+        
+        if not user:
+            update.message.reply_text("❌ Bạn cần thiết lập username trên Telegram để sử dụng bot này.")
+            return
+        
+        if user not in ADMIN_IDS:
+            update.message.reply_text("❌ Chỉ quản trị viên mới có thể thực hiện lệnh này.")
+            return
+        
+        if not context.args:
+            update.message.reply_text("❌ Sai cú pháp gòi. Ví dụ: /switchmodel gemini")
+            return
+            
+        new_model = context.args[0].lower()
+        
+        if new_model not in ['gemini', 'grok']:
+            update.message.reply_text("❌ Mô hình không hợp lệ. Chỉ hỗ trợ 'gemini' và 'grok'.")
+            return
+        
+        # Update the model configuration
+        os.environ['MODEL_CHOICE'] = new_model
+        
+        # Reinitialize the LLM wrapper
+        global llm
+        llm = LLMWrapper()
+        
+        update.message.reply_text(f"✅ Đã chuyển đổi mô hình thành '{new_model}'")
+    except Exception as e:
+        update.message.reply_text(f"❌ Lỗi: {str(e)}")
+
+def switch_model(update, context):
+    """Switch between different AI models"""
+    global llm
+    
+    if update.effective_user.id not in ADMIN_IDS:
+        update.message.reply_text("❌ Only admins can switch models.")
+        return
+        
+    if not context.args or len(context.args) < 1:
+        update.message.reply_text(
+            f"❌ Please specify a model name: 'gemini' or 'grok'\n"
+            f"Current model: *{llm.model_name}*", 
+            parse_mode='Markdown'
+        )
+        return
+        
+    model_name = context.args[0].lower()
+    
+    if model_name not in ['gemini', 'grok']:
+        update.message.reply_text(
+            f"❌ Invalid model name: '{model_name}'. Please use 'gemini' or 'grok'.\n"
+            f"Current model: *{llm.model_name}*",
+            parse_mode='Markdown'
+        )
+        return
+        
+    # Check if we already use this model
+    if model_name == llm.model_name:
+        update.message.reply_text(f"✅ Already using *{model_name}* model.", parse_mode='Markdown')
+        return
+        
+    # Check if required API keys are set
+    if model_name == 'gemini' and not os.getenv("GOOGLE_API_KEY"):
+        update.message.reply_text("❌ GOOGLE_API_KEY not set. Cannot switch to Gemini.")
+        return
+    elif model_name == 'grok' and not os.getenv("GROK_API_KEY"):
+        update.message.reply_text("❌ GROK_API_KEY not set. Cannot switch to Grok.")
+        return
+        
+    # Update the global MODEL_CHOICE
+    old_model = llm.model_name
+    os.environ['MODEL_CHOICE'] = model_name
+    
+    # Recreate the LLM wrapper
+    llm = LLMWrapper()
+    
+    update.message.reply_text(
+        f"✅ Switched from *{old_model}* to *{llm.model_name}* model.",
+        parse_mode='Markdown'
+    )
+
 def set_qr(update, context):
     try:
         chat_id = update.effective_chat.id
@@ -785,7 +941,7 @@ def get_qr(update, context):
 def help_command(update, context):
     # Basic help text for all users
     help_text = """
-📋 *HƯỚNG DẪN SỬ DỤNG BOT CHO HỘI NGƯỜI HÈN VN*
+📋 *HƯỚNG DẪN SỬ DỤNG BOT*
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 💰 *QUẢN LÝ NỢ*
@@ -836,11 +992,19 @@ def help_command(update, context):
 • /status - Xem trạng thái hệ thống và thông tin database
 • /shutdown - Tắt bot an toàn
 • /backup - Sao lưu database và gửi file về telegram để khôi phục
+• /switchmodel <model_name> - Switch between AI models (gemini, grok)
+
+⚡️ *Model Configuration*
+Bot can use different AI models. Current model: *{0}*
+To change models:
+1. Use /switchmodel gemini or /switchmodel grok
+2. Or set the MODEL_CHOICE environment variable to 'gemini' or 'grok'
+Note: Grok requires a valid GROK_API_KEY environment variable
 """
     
     # Add admin help if user is admin
     if update.effective_user and update.effective_user.id in ADMIN_IDS:
-        help_text += admin_help
+        help_text += admin_help.format(llm.model_name.capitalize())
     
     try:
         update.message.reply_text(help_text, parse_mode='Markdown')
@@ -883,6 +1047,10 @@ def status_command(update, context):
 🤖 *Process*:
 - PID: {os.getpid()}
 - Admin IDs: {ADMIN_IDS}
+
+🧠 *AI Model*:
+- Current: {llm.model_name.capitalize()}
+- Model ID: {llm.model_id if hasattr(llm, 'model_id') else 'gemini-2.0-flash'}
 """
         try:
             update.message.reply_text(status, parse_mode='Markdown')
@@ -1060,7 +1228,7 @@ Examples:
 - "How much do I owe?" → "/summary"
 """
         
-        response = model.generate_content(prompt)
+        response = llm.generate_content(prompt)
         if response and response.text:
             response_text = response.text.strip()
             
@@ -1098,7 +1266,8 @@ def execute_command(command_text, update, context):
         '/help': help_command,
         '/status': status_command,
         '/backup': backup_database,
-        '/shutdown': shutdown_command
+        '/shutdown': shutdown_command,
+        '/switchmodel': switch_model
     }
     
     # Parse the command and arguments
@@ -1179,7 +1348,7 @@ Examples:
 """
     
     try:
-        response = model.generate_content(prompt)
+        response = llm.generate_content(prompt)
         if response and response.text:
             follow_up = response.text.strip()
             # Allow slightly longer responses for humorous content
@@ -1247,6 +1416,7 @@ def main():
     dp.add_handler(CommandHandler("shutdown", shutdown_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
     dp.add_handler(CommandHandler("status", status_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
     dp.add_handler(CommandHandler("backup", backup_database, filters=Filters.chat_type.groups | Filters.chat_type.private))
+    dp.add_handler(CommandHandler("switchmodel", switch_model, filters=Filters.chat_type.groups | Filters.chat_type.private))
 
     print("Bot started. Press Ctrl+C to stop.")
     updater.start_polling()
