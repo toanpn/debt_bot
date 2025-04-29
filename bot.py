@@ -1,5 +1,6 @@
 import sqlite3
 from telegram.ext import Updater, CommandHandler, Filters, MessageHandler
+from telegram import MessageEntity
 from datetime import datetime
 import math
 import requests
@@ -10,6 +11,12 @@ import atexit
 import time
 import threading
 import shutil
+import google.generativeai as genai
+import re
+
+# Set up Gemini API
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 # Set database path - use environment variable or default to data directory
 DB_DIR = os.environ.get('DB_DIR', os.path.join(os.path.expanduser('~'), 'bot_data'))
@@ -76,7 +83,7 @@ print(f"Using database at: {DB_PATH}")
 check_repository_db()
 
 # Check if another instance is running
-check_instance()
+#check_instance()
 
 # ====== DB Migration ======
 
@@ -950,6 +957,238 @@ def backup_database(update, context):
             pass
         update.message.reply_text(f"❌ Lỗi khi sao lưu: {str(e)}")
 
+# ====== LLM Chat Handler ======
+
+def extract_command_from_text(text):
+    """Extract potential command patterns from natural language text."""
+    patterns = {
+        r'(?i)add.*debt.*(\d+).*to.*@(\w+)': '/adddebt',
+        r'(?i)divide.*(\d+).*between.*(@\w+(?:\s+@\w+)*)': '/divide',
+        r'(?i)clear.*debt.*@(\w+)': '/cleardebt',
+        r'(?i)show.*summary.*(?:for.*)?(@\w+)?': '/summary',
+        r'(?i)show.*history.*(?:for.*)?(@\w+)?': '/history',
+        r'(?i)show.*group.*summary': '/groupsum',
+        r'(?i)set.*name.*@(\w+).*to.*(.+)': '/setname',
+        r'(?i)set.*qr.*(?:code)?.*to.*(\S+)': '/setqr',
+        r'(?i)show.*qr.*(?:code)?.*(?:for.*)?(@\w+)?': '/qr',
+        r'(?i)help': '/help'
+    }
+    
+    for pattern, command in patterns.items():
+        match = re.search(pattern, text)
+        if match:
+            return command, match.groups()
+    return None, None
+
+def handle_llm_chat(update, context):
+    """Handle natural language chat with the bot using Gemini."""
+    message = update.message
+    if not message or not message.text:
+        return
+
+    # Get bot's username and possible mention formats
+    bot_username = context.bot.username
+    possible_mentions = [
+        f"@{bot_username}",
+        f"@{bot_username.lower()}",
+        f"@{bot_username.upper()}"
+    ]
+    
+    # Check if any of the possible mentions are in the message
+    mentioned = any(mention in message.text.lower() for mention in [m.lower() for m in possible_mentions])
+    if not mentioned:
+        return
+    
+    # Get the actual mention used
+    used_mention = next((m for m in possible_mentions if m.lower() in message.text.lower()), possible_mentions[0])
+    
+    # Remove bot mention from text
+    user_text = message.text.replace(used_mention, "").strip()
+    
+    # If no actual message after mention, ignore
+    if not user_text:
+        update.message.reply_text("🙏 Dạ đại ca cần nô tỳ giúp gì ạ? Nô tỳ luôn sẵn lòng phụng sự đại ca anh minh!")
+        return
+    
+    try:
+        # First try to extract command pattern
+        command, args = extract_command_from_text(user_text)
+        
+        if command:
+            # Convert natural language to command
+            if args:
+                command_text = f"{command} {' '.join(args)}"
+            else:
+                command_text = command
+                
+            # Execute the command by calling the appropriate function
+            execute_command(command_text, update, context)
+            return
+            
+        # If no command pattern found, use Gemini for intent recognition and command generation
+        prompt = f"""You are a Vietnamese debt management bot. Analyze this user message: "{user_text}"
+
+Your task is to:
+1. Determine what debt management action the user wants to perform
+2. Convert it to the appropriate command format
+3. Extract all relevant parameters
+
+Available Commands and their formats:
+- /adddebt <amount> @username1 [@username2...] [note] - Add debt
+- /divide <amount> @user1 @user2... [note] - Split an expense
+- /cleardebt @username1 [@username2...] [amount] - Clear debt
+- /summary [@username] - View debt summary
+- /history [@username] [count] - View transaction history
+- /groupsum - View group summary
+- /setname @username display_name - Set display name
+- /setqr url - Set QR code
+- /qr [@username] - View QR code
+- /help - View help
+
+Respond ONLY with the exact command to execute (e.g., "/adddebt 500 @toan Trà sữa") and nothing else.
+If you cannot determine a command, respond with "CHAT: " followed by a humorous, playful reply in Vietnamese where you:
+- Use "nô tỳ" for self-reference
+- Use "đại ca" for user reference
+- Speak like a loyal, silly servant to a master
+- Be flattering and dramatic
+- Include funny expressions and metaphors
+- Add one appropriate emoji
+
+Examples:
+- "I owe Toan 50k for coffee" → "/adddebt 50000 @toan Coffee"
+- "Split 90k bill between me, Quy and Tuan" → "/divide 90000 @quy @tuan Shared bill"
+- "How much do I owe?" → "/summary"
+"""
+        
+        response = model.generate_content(prompt)
+        if response and response.text:
+            response_text = response.text.strip()
+            
+            # Check if response starts with a command
+            if response_text.startswith('/'):
+                # Extract command and execute it directly
+                execute_command(response_text, update, context)
+            # Check if it's a chat response
+            elif response_text.startswith('CHAT:'):
+                chat_response = response_text[5:].strip()
+                update.message.reply_text(chat_response)
+            else:
+                update.message.reply_text(response_text)
+        else:
+            update.message.reply_text("🙏 Nô tỳ xin lỗi đại ca, trí thông minh nhỏ bé của nô tỳ không thể xử lý yêu cầu cao siêu của ngài lúc này! 😭")
+        
+    except Exception as e:
+        print(f"Error in LLM chat: {e}")
+        update.message.reply_text("🙏 Nô tỳ xin lỗi đại ca anh minh! Trí óc tầm thường của nô tỳ không hiểu được ý của ngài. Xin đại ca từ bi hạ cố chỉ dạy lại hoặc gõ /help để nô tỳ được hầu hạ đúng cách! ��‍♂️")
+
+def execute_command(command_text, update, context):
+    """Execute a command by directly calling the appropriate function."""
+    # Map of command names to their handler functions
+    command_handlers = {
+        '/adddebt': add_debt,
+        '/divide': divide_expense,
+        '/cleardebt': clear_debt,
+        '/summary': summary,
+        '/history': history,
+        '/groupsum': group_summary,
+        '/setname': set_name,
+        '/setqr': set_qr,
+        '/qr': get_qr,
+        '/get': get_qr,
+        '/help': help_command,
+        '/status': status_command,
+        '/backup': backup_database,
+        '/shutdown': shutdown_command
+    }
+    
+    # Parse the command and arguments
+    parts = command_text.split()
+    command = parts[0].lower()
+    args = parts[1:] if len(parts) > 1 else []
+    
+    # Find the appropriate handler function
+    handler = command_handlers.get(command)
+    
+    if handler:
+        # Store the original args and text
+        original_args = context.args
+        original_text = update.message.text
+        
+        try:
+            # Set the context args to our parsed args
+            context.args = args
+            # Set the message text to our command
+            update.message.text = command_text
+            # Call the handler directly
+            handler(update, context)
+            
+            # Generate a friendly follow-up response after successful command execution
+            generate_follow_up_response(command, args, update, context)
+        finally:
+            # Restore original values
+            context.args = original_args
+            update.message.text = original_text
+    else:
+        update.message.reply_text(f"🤔 Nô tỳ không hiểu lệnh '{command}'. Xin hãy thử lại hoặc gõ /help để xem hướng dẫn.")
+
+def generate_follow_up_response(command, args, update, context):
+    """Generate a friendly follow-up response after executing a command."""
+    command_info = {
+        '/adddebt': "adding debt",
+        '/divide': "dividing expenses",
+        '/cleardebt': "clearing debt",
+        '/summary': "summarizing debts",
+        '/history': "showing transaction history",
+        '/groupsum': "showing group summary",
+        '/setname': "setting display name",
+        '/setqr': "setting QR code",
+        '/qr': "retrieving QR code",
+        '/get': "retrieving information",
+        '/help': "showing help",
+    }
+    
+    action = command_info.get(command, "processing request")
+    
+    prompt = f"""As a humorous, playful Vietnamese debt management bot, generate a very funny, over-the-top follow-up response 
+after successfully {action}. 
+
+Key details:
+- Command executed: {command}
+- Arguments: {' '.join(args)}
+- User: {update.message.from_user.first_name or 'User'}
+
+Response style REQUIREMENTS (absolutely must follow):
+- Always use Vietnamese
+- ALWAYS use "nô tỳ" for self-reference
+- ALWAYS use "đại ca" for user reference
+- Speak like a loyal, slightly silly servant to a master
+- Be extremely flattering and overly dramatic
+- Include exaggerated compliments about the user's brilliance, wisdom, or generosity
+- Use funny, exaggerated expressions and metaphors
+- Add humorous, theatrical flourishes
+- Include at least one appropriate emoji
+- Keep it short (1-2 sentences maximum)
+- Don't repeat information the command already showed
+- Don't mention the command name directly
+
+Examples:
+- After adding debt: "✨ Nô tỳ đã ghi sổ cẩn thận rồi ạ! Trí nhớ siêu phàm của đại ca thật khiến nô tỳ ngưỡng mộ vô cùng! 🙇‍♂️"
+- After dividing expense: "🌟 Ôi, đại ca tính toán quá thông minh! Nô tỳ đã chia đều tài sản như Tôn Ngộ Không chia đào tiên vậy! 🙈"
+- After showing summary: "👑 Báo cáo đại ca anh minh! Kho báu của ngài đang chờ thu hồi, đại ca thật giàu có tuyệt vời! 💰"
+- After clearing debt: "🎉 Ối giời ơi! Đại ca vừa xóa nợ ư? Tấm lòng bao dung của đại ca còn to hơn cả biển Đông! 😍"
+"""
+    
+    try:
+        response = model.generate_content(prompt)
+        if response and response.text:
+            follow_up = response.text.strip()
+            # Allow slightly longer responses for humorous content
+            if len(follow_up) < 200:
+                update.message.reply_text(follow_up)
+    except Exception as e:
+        print(f"Error generating follow-up response: {e}")
+        # Silently fail - don't send an error message to avoid confusion
+
 # ====== Main Bot Setup ======
 
 def main():
@@ -982,6 +1221,14 @@ def main():
             print("Critical error in error handler")
     
     dp.add_error_handler(error_handler)
+
+    # Add LLM chat handler in a higher group number (1) so it runs after command handlers
+    #add mention filter
+
+    dp.add_handler(MessageHandler(
+        Filters.text & ~Filters.command & Filters.entity("mention"),
+        handle_llm_chat
+    ))
 
     # Regular commands
     dp.add_handler(CommandHandler("adddebt", add_debt, filters=Filters.chat_type.groups | Filters.chat_type.private))
