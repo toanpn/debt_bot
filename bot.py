@@ -83,7 +83,7 @@ print(f"Using database at: {DB_PATH}")
 check_repository_db()
 
 # Check if another instance is running
-#check_instance()
+check_instance()
 
 # ====== DB Migration ======
 
