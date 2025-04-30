@@ -70,8 +70,8 @@ A Telegram bot for tracking debts among friends and groups with natural language
 - `TOKEN` - Your Telegram bot token
 - `DB_DIR` - Directory to store the database (defaults to ~/bot_data)
 - `GOOGLE_API_KEY` - Google API key for Gemini AI integration
+- `DEEPSEEK_API_KEY` - DeepSeek API key for Deepseek AI integration
 - `GROK_API_KEY` - X.AI API key for Grok AI integration
-- `MODEL_CHOICE` - AI model to use (default: "gemini", options: "gemini", "grok", or "deepseek")
 - `ADMIN_IDS` - Comma-separated Fixed in code, list of Telegram user IDs with admin privileges
 
 ### AI Model Configuration
@@ -80,17 +80,14 @@ The bot supports multiple AI models for natural language processing:
 1. **Gemini** (default)
    - Requires `GOOGLE_API_KEY` environment variable
    - Uses Google's Gemini 2.0 Flash model
-   - Set with `MODEL_CHOICE=gemini`
 
 2. **Grok**
    - Requires `GROK_API_KEY` environment variable
    - Uses X.AI's Grok-3-mini-beta model
-   - Set with `MODEL_CHOICE=grok`
 
 3. **DeepSeek**
    - Requires `DEEPSEEK_API_KEY` environment variable
    - Uses DeepSeek-V3 model (deepseek-chat)
-   - Set with `MODEL_CHOICE=deepseek`
 
 Admins can switch models during runtime using the `/switchmodel` command.
 

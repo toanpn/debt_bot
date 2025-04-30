@@ -17,13 +17,11 @@ import json
 from openai import OpenAI  # Add import for OpenAI SDK
 
 # ====== Model Configuration ======
-# Model selection - default to gemini if not specified
-MODEL_CHOICE = os.environ.get('MODEL_CHOICE', 'gemini').lower()
-
 # Wrapper class for different LLM models
 class LLMWrapper:
-    def __init__(self):
-        self.model_name = MODEL_CHOICE
+    def __init__(self, model_name=None):
+        # Default to gemini if no model specified
+        self.model_name = model_name if model_name else 'gemini'
         
         # Initialize the selected model
         if self.model_name == 'gemini':
@@ -855,12 +853,11 @@ def switch_model(update, context):
             update.message.reply_text("❌ Gói OpenAI chưa được cài đặt. Cài đặt bằng lệnh: `pip install openai`")
             return
         
-    # Update the global MODEL_CHOICE
+    # Save the old model name for the message
     old_model = llm.model_name
-    os.environ['MODEL_CHOICE'] = model_name
     
-    # Recreate the LLM wrapper
-    llm = LLMWrapper()
+    # Create a new LLMWrapper with the specified model
+    llm = LLMWrapper(model_name)
     
     update.message.reply_text(
         f"✅ Đã chuyển từ mô hình *{old_model}* sang mô hình *{llm.model_name}*.",
@@ -1006,8 +1003,7 @@ def help_command(update, context):
 ⚡️ *Model Configuration*
 Bot can use different AI models. Current model: *{0}*
 To change models:
-1. Use /switchmodel gemini, /switchmodel grok, or /switchmodel deepseek
-2. Or set the MODEL_CHOICE environment variable to 'gemini', 'grok', or 'deepseek'
+• Use /switchmodel gemini, /switchmodel grok, or /switchmodel deepseek
 
 Note: 
 - Gemini requires a valid GOOGLE_API_KEY environment variable
