@@ -14,6 +14,7 @@ import shutil
 import google.generativeai as genai
 import re
 import json
+from openai import OpenAI  # Add import for OpenAI SDK
 
 # ====== Model Configuration ======
 # Model selection - default to gemini if not specified
@@ -36,6 +37,15 @@ class LLMWrapper:
             self.grok_api_url = "https://api.x.ai/v1/chat/completions"
             self.model_id = "grok-3-mini-beta"
             print(f"Using Grok model: {self.model_id}")
+        elif self.model_name == 'deepseek':
+            # Set up DeepSeek API using OpenAI SDK
+            self.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+            self.model_id = "deepseek-chat"  # Using DeepSeek-V3 model
+            self.client = OpenAI(
+                api_key=self.deepseek_api_key,
+                base_url="https://api.deepseek.com"
+            )
+            print(f"Using DeepSeek model: {self.model_id}")
         else:
             # Default to Gemini if unknown model specified
             print(f"Unknown model '{self.model_name}', defaulting to Gemini")
@@ -81,6 +91,28 @@ class LLMWrapper:
                     return None
             except Exception as e:
                 print(f"Error calling Grok API: {e}")
+                return None
+        elif self.model_name == 'deepseek':
+            # Use DeepSeek API via OpenAI SDK
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model_id,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.7,
+                    stream=False
+                )
+                
+                # Create a response object similar to Gemini's for consistency
+                class DeepSeekResponse:
+                    def __init__(self, text):
+                        self.text = text
+                
+                return DeepSeekResponse(response.choices[0].message.content)
+            except Exception as e:
+                print(f"Error calling DeepSeek API: {e}")
                 return None
         
         # Fallback for unknown models
@@ -774,77 +806,54 @@ def divide_expense(update, context):
         update.message.reply_text(f"❌ Lỗi: {str(e)}")
 
 def switch_model(update, context):
-    try:
-        chat_id = update.effective_chat.id
-        user = update.message.from_user.username
-        
-        if not user:
-            update.message.reply_text("❌ Bạn cần thiết lập username trên Telegram để sử dụng bot này.")
-            return
-        
-        if user not in ADMIN_IDS:
-            update.message.reply_text("❌ Chỉ quản trị viên mới có thể thực hiện lệnh này.")
-            return
-        
-        if not context.args:
-            update.message.reply_text("❌ Sai cú pháp gòi. Ví dụ: /switchmodel gemini")
-            return
-            
-        new_model = context.args[0].lower()
-        
-        if new_model not in ['gemini', 'grok']:
-            update.message.reply_text("❌ Mô hình không hợp lệ. Chỉ hỗ trợ 'gemini' và 'grok'.")
-            return
-        
-        # Update the model configuration
-        os.environ['MODEL_CHOICE'] = new_model
-        
-        # Reinitialize the LLM wrapper
-        global llm
-        llm = LLMWrapper()
-        
-        update.message.reply_text(f"✅ Đã chuyển đổi mô hình thành '{new_model}'")
-    except Exception as e:
-        update.message.reply_text(f"❌ Lỗi: {str(e)}")
-
-def switch_model(update, context):
     """Switch between different AI models"""
     global llm
     
     if update.effective_user.id not in ADMIN_IDS:
-        update.message.reply_text("❌ Only admins can switch models.")
+        update.message.reply_text("❌ Chỉ quản trị viên mới có thể thực hiện lệnh này.")
         return
         
     if not context.args or len(context.args) < 1:
         update.message.reply_text(
-            f"❌ Please specify a model name: 'gemini' or 'grok'\n"
-            f"Current model: *{llm.model_name}*", 
+            f"❌ Vui lòng chỉ định tên mô hình: 'gemini', 'grok', hoặc 'deepseek'\n"
+            f"Mô hình hiện tại: *{llm.model_name}*", 
             parse_mode='Markdown'
         )
         return
         
     model_name = context.args[0].lower()
     
-    if model_name not in ['gemini', 'grok']:
+    if model_name not in ['gemini', 'grok', 'deepseek']:
         update.message.reply_text(
-            f"❌ Invalid model name: '{model_name}'. Please use 'gemini' or 'grok'.\n"
-            f"Current model: *{llm.model_name}*",
+            f"❌ Tên mô hình không hợp lệ: '{model_name}'. Vui lòng sử dụng 'gemini', 'grok', hoặc 'deepseek'.\n"
+            f"Mô hình hiện tại: *{llm.model_name}*",
             parse_mode='Markdown'
         )
         return
         
     # Check if we already use this model
     if model_name == llm.model_name:
-        update.message.reply_text(f"✅ Already using *{model_name}* model.", parse_mode='Markdown')
+        update.message.reply_text(f"✅ Đã đang sử dụng mô hình *{model_name}*.", parse_mode='Markdown')
         return
         
     # Check if required API keys are set
     if model_name == 'gemini' and not os.getenv("GOOGLE_API_KEY"):
-        update.message.reply_text("❌ GOOGLE_API_KEY not set. Cannot switch to Gemini.")
+        update.message.reply_text("❌ GOOGLE_API_KEY chưa được thiết lập. Không thể chuyển sang Gemini.")
         return
     elif model_name == 'grok' and not os.getenv("GROK_API_KEY"):
-        update.message.reply_text("❌ GROK_API_KEY not set. Cannot switch to Grok.")
+        update.message.reply_text("❌ GROK_API_KEY chưa được thiết lập. Không thể chuyển sang Grok.")
         return
+    elif model_name == 'deepseek':
+        if not os.getenv("DEEPSEEK_API_KEY"):
+            update.message.reply_text("❌ DEEPSEEK_API_KEY chưa được thiết lập. Không thể chuyển sang DeepSeek.")
+            return
+        
+        # Check if OpenAI SDK is installed
+        try:
+            import openai
+        except ImportError:
+            update.message.reply_text("❌ Gói OpenAI chưa được cài đặt. Cài đặt bằng lệnh: `pip install openai`")
+            return
         
     # Update the global MODEL_CHOICE
     old_model = llm.model_name
@@ -854,7 +863,7 @@ def switch_model(update, context):
     llm = LLMWrapper()
     
     update.message.reply_text(
-        f"✅ Switched from *{old_model}* to *{llm.model_name}* model.",
+        f"✅ Đã chuyển từ mô hình *{old_model}* sang mô hình *{llm.model_name}*.",
         parse_mode='Markdown'
     )
 
@@ -992,14 +1001,18 @@ def help_command(update, context):
 • /status - Xem trạng thái hệ thống và thông tin database
 • /shutdown - Tắt bot an toàn
 • /backup - Sao lưu database và gửi file về telegram để khôi phục
-• /switchmodel <model_name> - Switch between AI models (gemini, grok)
+• /switchmodel <model_name> - Switch between AI models (gemini, grok, deepseek)
 
 ⚡️ *Model Configuration*
 Bot can use different AI models. Current model: *{0}*
 To change models:
-1. Use /switchmodel gemini or /switchmodel grok
-2. Or set the MODEL_CHOICE environment variable to 'gemini' or 'grok'
-Note: Grok requires a valid GROK_API_KEY environment variable
+1. Use /switchmodel gemini, /switchmodel grok, or /switchmodel deepseek
+2. Or set the MODEL_CHOICE environment variable to 'gemini', 'grok', or 'deepseek'
+
+Note: 
+- Gemini requires a valid GOOGLE_API_KEY environment variable
+- Grok requires a valid GROK_API_KEY environment variable
+- DeepSeek requires a valid DEEPSEEK_API_KEY environment variable and OpenAI package (pip install openai)
 """
     
     # Add admin help if user is admin
@@ -1033,6 +1046,15 @@ def status_command(update, context):
         name_count = c.fetchone()[0]
         conn_status.close()
         
+        # Get model-specific details
+        model_details = ""
+        if llm.model_name == 'gemini':
+            model_details = "- Model ID: gemini-2.0-flash"
+        elif llm.model_name == 'grok':
+            model_details = f"- Model ID: {llm.model_id}"
+        elif llm.model_name == 'deepseek':
+            model_details = f"- Model ID: {llm.model_id} (DeepSeek-V3)\n- API: Using OpenAI SDK with DeepSeek endpoint"
+        
         # Format message
         status = f"""
 📊 *BOT STATUS*
@@ -1050,7 +1072,7 @@ def status_command(update, context):
 
 🧠 *AI Model*:
 - Current: {llm.model_name.capitalize()}
-- Model ID: {llm.model_id if hasattr(llm, 'model_id') else 'gemini-2.0-flash'}
+{model_details}
 """
         try:
             update.message.reply_text(status, parse_mode='Markdown')
