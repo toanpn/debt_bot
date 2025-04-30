@@ -119,6 +119,147 @@ class LLMWrapper:
 # Initialize the LLM wrapper
 llm = LLMWrapper()
 
+# ====== Chat Context Management ======
+# Dictionary to store chat contexts for each group
+chat_contexts = {}
+# Default and maximum context sizes
+DEFAULT_CONTEXT_SIZE = 5
+MAX_CONTEXT_SIZE = 20
+# Default and limits for summary length
+DEFAULT_SUMMARY_LENGTH = 150
+MIN_SUMMARY_LENGTH = 50
+MAX_SUMMARY_LENGTH = 500
+# Dictionary to store context size settings for each group
+context_sizes = {}
+# Dictionary to store summary length settings for each group
+summary_lengths = {}
+
+def generate_conversation_summary(message, response, max_length=None):
+    """Generate a summary of a conversation using the LLM"""
+    # Use the provided max_length or get from settings, or use default
+    if max_length is None:
+        chat_id = None
+        if isinstance(message, dict) and 'chat_id' in message:
+            chat_id = message['chat_id']
+        elif isinstance(response, dict) and 'chat_id' in response:
+            chat_id = response['chat_id']
+        
+        max_length = summary_lengths.get(chat_id, DEFAULT_SUMMARY_LENGTH)
+    
+    prompt = f"""
+As a helpful assistant, please generate a very concise one-line summary (maximum {max_length} characters) 
+of the following conversation exchange. Focus only on the key facts, information, or question/answer.
+Keep it informative and factual.
+
+User message: "{message}"
+AI response: "{response}"
+
+Return only the summary prefixed with "Summary: " and nothing else. 
+Examples:
+- Summary: User asked about Vietnamese food, bot recommended pho and bun bo Hue
+- Summary: User wanted to know about weather in Hanoi, bot provided current conditions
+- Summary: User asked if bot remembers previous conversation, bot confirmed memory capabilities
+"""
+    
+    try:
+        summary_response = llm.generate_content(prompt)
+        if summary_response and summary_response.text:
+            summary_text = summary_response.text.strip()
+            # Ensure it starts with "Summary: "
+            if summary_text.startswith("Summary: "):
+                return summary_text
+            else:
+                return f"Summary: {summary_text}"
+        else:
+            return f"Summary: Conversation about {message[:30]}..."
+    except Exception as e:
+        print(f"Error generating summary: {e}")
+        return f"Summary: Conversation about {message[:30]}..."
+
+def add_to_chat_context(chat_id, username, message, bot_response):
+    """Add a message to the chat context for a group"""
+    # Create context for this chat if it doesn't exist
+    if chat_id not in chat_contexts:
+        chat_contexts[chat_id] = []
+    
+    # Get the context size for this chat
+    context_size = context_sizes.get(chat_id, DEFAULT_CONTEXT_SIZE)
+    
+    # If context size is 0, don't store anything (memory bank is disabled)
+    if context_size == 0:
+        return
+    
+    # Get summary length for this chat
+    summary_length = summary_lengths.get(chat_id, DEFAULT_SUMMARY_LENGTH)
+    
+    # Generate a summary for this conversation exchange
+    summary = generate_conversation_summary(message, bot_response, summary_length)
+    
+    # Add the new message to the context
+    chat_contexts[chat_id].append({
+        'username': username,
+        'message': message,
+        'bot_response': bot_response,
+        'summary': summary,
+        'timestamp': datetime.now().isoformat(),
+        'chat_id': chat_id
+    })
+    
+    # Trim context if it exceeds the limit
+    if len(chat_contexts[chat_id]) > context_size:
+        chat_contexts[chat_id] = chat_contexts[chat_id][-context_size:]
+
+def get_chat_context(chat_id):
+    """Get the current chat context for a group"""
+    return chat_contexts.get(chat_id, [])
+
+def format_context_for_prompt(context):
+    """Format the chat context into a string for the prompt"""
+    if not context:
+        return ""
+    
+    formatted = "Previous conversation summaries:\n"
+    for entry in context:
+        display_name = get_display_name(entry['username'], entry.get('chat_id', 0))
+        # Use summary instead of full text when available
+        if 'summary' in entry and entry['summary']:
+            formatted += f"- {entry['summary']}\n"
+        else:
+            # Fallback to old format for backward compatibility
+            formatted += f"- {display_name}: asked about '{entry['message'][:30]}...'\n"
+            formatted += f"  AI answered about '{entry['bot_response'][:30]}...'\n"
+    
+    return formatted
+
+def set_context_size(chat_id, size, summary_length=None):
+    """Set the context size and optionally summary length for a group"""
+    # Handle context size
+    if size < 0:
+        size = 0
+    elif size > MAX_CONTEXT_SIZE:
+        size = MAX_CONTEXT_SIZE
+    
+    context_sizes[chat_id] = size
+    
+    # Handle summary length if provided
+    if summary_length is not None:
+        if summary_length < MIN_SUMMARY_LENGTH:
+            summary_length = MIN_SUMMARY_LENGTH
+        elif summary_length > MAX_SUMMARY_LENGTH:
+            summary_length = MAX_SUMMARY_LENGTH
+        
+        summary_lengths[chat_id] = summary_length
+    
+    # Trim existing context if needed
+    if chat_id in chat_contexts:
+        if size == 0:
+            # If size is 0, clear the context completely
+            chat_contexts.pop(chat_id)
+        elif len(chat_contexts[chat_id]) > size:
+            chat_contexts[chat_id] = chat_contexts[chat_id][-size:]
+    
+    return size, summary_lengths.get(chat_id, DEFAULT_SUMMARY_LENGTH)
+
 # Set database path - use environment variable or default to data directory
 DB_DIR = os.environ.get('DB_DIR', os.path.join(os.path.expanduser('~'), 'bot_data'))
 DB_PATH = os.path.join(DB_DIR, 'debtbot.db')
@@ -987,9 +1128,17 @@ def help_command(update, context):
 • /setname @username tên_hiển_thị - Đặt tên hiển thị
   _Ví dụ: /setname @toan Anh Toàn_
 
+• /setmemorybank <số_tin_nhắn> [độ_dài_tóm_tắt] - Cài đặt bộ nhớ trò chuyện
+  _Ví dụ: /setmemorybank 10 hoặc /setmemorybank 10 200_
+  _Số thứ nhất (bắt buộc): số lượng tin nhắn (mặc định: 5, tối đa: 20)_
+  _Số thứ hai (tùy chọn): độ dài tóm tắt (mặc định: 150, giới hạn: 50-500)_
+  _Sử dụng /setmemorybank 0 để tắt hoàn toàn_
+  _Bot tạo tóm tắt thông minh để nhớ và phản hồi nhanh hơn trong tương lai_
+
 💡 *Mẹo*: 
 - QR code có thể là ảnh mã QR thanh toán từ ví điện tử của bạn
 - Dữ liệu được lưu trong database trên Railway
+- Bot tự động tóm tắt các cuộc trò chuyện để nhớ các thông tin quan trọng
 """
 
     # Additional admin help text
@@ -999,6 +1148,7 @@ def help_command(update, context):
 • /shutdown - Tắt bot an toàn
 • /backup - Sao lưu database và gửi file về telegram để khôi phục
 • /switchmodel <model_name> - Switch between AI models (gemini, grok, deepseek)
+• /showmemorybank - Show current chat context for debugging purposes
 
 ⚡️ *Model Configuration*
 Bot can use different AI models. Current model: *{0}*
@@ -1051,6 +1201,29 @@ def status_command(update, context):
         elif llm.model_name == 'deepseek':
             model_details = f"- Model ID: {llm.model_id} (DeepSeek-V3)\n- API: Using OpenAI SDK with DeepSeek endpoint"
         
+        # Get chat context info
+        chat_context_info = f"- Default size: {DEFAULT_CONTEXT_SIZE}\n- Maximum size: {MAX_CONTEXT_SIZE}\n- Active groups: {len(chat_contexts)}"
+        if chat_contexts:
+            # Count total messages stored across all groups
+            total_msgs = sum(len(msgs) for msgs in chat_contexts.values())
+            chat_context_info += f"\n- Total messages: {total_msgs}"
+            
+            # Show custom context sizes if any
+            if context_sizes:
+                custom_sizes = [f"{chat_id}: {size}" for chat_id, size in context_sizes.items()]
+                chat_context_info += f"\n- Custom sizes: {', '.join(custom_sizes[:3])}"
+                if len(custom_sizes) > 3:
+                    chat_context_info += f" (+{len(custom_sizes) - 3} more)"
+            
+            # Show custom summary lengths if any
+            if summary_lengths:
+                custom_lengths = [f"{chat_id}: {length} chars" for chat_id, length in summary_lengths.items()]
+                chat_context_info += f"\n- Custom summary lengths: {', '.join(custom_lengths[:3])}"
+                if len(custom_lengths) > 3:
+                    chat_context_info += f" (+{len(custom_lengths) - 3} more)"
+            
+            chat_context_info += f"\n- Default summary length: {DEFAULT_SUMMARY_LENGTH} chars (range: {MIN_SUMMARY_LENGTH}-{MAX_SUMMARY_LENGTH})"
+        
         # Format message
         status = f"""
 📊 *BOT STATUS*
@@ -1062,13 +1235,16 @@ def status_command(update, context):
 - Debts: {debt_count} records
 - Names: {name_count} mappings
 
-🤖 *Process*:
-- PID: {os.getpid()}
-- Admin IDs: {ADMIN_IDS}
-
 🧠 *AI Model*:
 - Current: {llm.model_name.capitalize()}
 {model_details}
+
+💬 *Chat Context*:
+{chat_context_info}
+
+🤖 *Process*:
+- PID: {os.getpid()}
+- Admin IDs: {ADMIN_IDS}
 """
         try:
             update.message.reply_text(status, parse_mode='Markdown')
@@ -1143,6 +1319,41 @@ def backup_database(update, context):
             pass
         update.message.reply_text(f"❌ Lỗi khi sao lưu: {str(e)}")
 
+def show_memory_bank_command(update, context):
+    """Command to show the current chat context for a group"""
+    chat_id = update.effective_chat.id
+    
+    # Only admins can use this command
+    if update.effective_user.id not in ADMIN_IDS:
+        update.message.reply_text("❌ Chỉ quản trị viên mới có thể xem ngữ cảnh trò chuyện.")
+        return
+        
+    # Get current context
+    current_context = get_chat_context(chat_id)
+    current_size = context_sizes.get(chat_id, DEFAULT_CONTEXT_SIZE)
+    current_length = summary_lengths.get(chat_id, DEFAULT_SUMMARY_LENGTH)
+    
+    if not current_context:
+        update.message.reply_text("ℹ️ Nhóm này chưa có ngữ cảnh trò chuyện nào.")
+        return
+        
+    # Format context for display
+    msg = f"📝 NGỮ CẢNH TRÒ CHUYỆN\n"
+    msg += f"- Kích thước: {current_size}/{MAX_CONTEXT_SIZE}\n"
+    msg += f"- Độ dài tóm tắt: {current_length} ký tự\n\n"
+    
+    for i, entry in enumerate(current_context, 1):
+        display_name = get_display_name(entry['username'], chat_id)
+        timestamp = datetime.fromisoformat(entry['timestamp']).strftime("%d/%m %H:%M")
+        
+        # Show summary if available
+        if 'summary' in entry and entry['summary']:
+            msg += f"{i}. {timestamp} - {display_name}: {entry['summary']}\n"
+        else:
+            msg += f"{i}. {timestamp} - {display_name}: {entry['message'][:30]}{'...' if len(entry['message']) > 30 else ''}\n"
+    
+    update.message.reply_text(msg)
+
 # ====== LLM Chat Handler ======
 
 def extract_command_from_text(text):
@@ -1210,9 +1421,19 @@ def handle_llm_chat(update, context):
             # Execute the command by calling the appropriate function
             execute_command(command_text, update, context)
             return
+        
+        # Get chat ID for context
+        chat_id = update.effective_chat.id
+        username = update.message.from_user.username or update.message.from_user.first_name
+            
+        # Get chat context for this group
+        context_data = get_chat_context(chat_id)
+        context_text = format_context_for_prompt(context_data)
             
         # If no command pattern found, use Gemini for intent recognition and command generation
         prompt = f"""You are a Vietnamese debt management bot that can also chat about other topics. Analyze this user message: "{user_text}"
+
+{context_text}
 
 Step 1: Determine if this is a debt-related question or command.
 
@@ -1247,6 +1468,7 @@ If the message is NOT debt-related but about another topic like food, general ch
 - If asked about food, you can share Vietnamese food suggestions or recipes
 - If it's casual chat, respond in a friendly, playful manner
 - If asked a question, provide helpful information if you know it
+- If you're asked a follow-up question, refer to the previous context to give a consistent answer
 
 Examples:
 - "I owe Toan 50k for coffee" → "/adddebt 50000 @toan Coffee"
@@ -1268,8 +1490,14 @@ Examples:
             elif response_text.startswith('CHAT:'):
                 chat_response = response_text[5:].strip()
                 update.message.reply_text(chat_response)
+                
+                # Store chat context for this group
+                add_to_chat_context(chat_id, username, user_text, chat_response)
             else:
                 update.message.reply_text(response_text)
+                
+                # Store chat context for this group
+                add_to_chat_context(chat_id, username, user_text, response_text)
         else:
             update.message.reply_text("🙏 Nô tỳ xin lỗi đại ca, trí thông minh nhỏ bé của nô tỳ không thể xử lý yêu cầu cao siêu của ngài lúc này! 😭")
         
@@ -1363,10 +1591,8 @@ Response style REQUIREMENTS (absolutely must follow):
 - Include exaggerated compliments about the user's brilliance, wisdom, or generosity
 - Use funny, exaggerated expressions and metaphors
 - Add humorous, theatrical flourishes
-- Include at least one appropriate emoji
-- Keep it short (1-2 sentences maximum)
-- Don't repeat information the command already showed
-- Don't mention the command name directly
+- Include funny appropriate emoji
+
 
 Examples:
 - After adding debt: "✨ Nô tỳ đã ghi sổ cẩn thận rồi ạ! Trí nhớ siêu phàm của đại ca thật khiến nô tỳ ngưỡng mộ vô cùng! 🙇‍♂️"
@@ -1385,6 +1611,68 @@ Examples:
     except Exception as e:
         print(f"Error generating follow-up response: {e}")
         # Silently fail - don't send an error message to avoid confusion
+
+def set_memory_bank_command(update, context):
+    """Command to set the chat context size and summary length for a group"""
+    chat_id = update.effective_chat.id
+    
+    if not context.args or len(context.args) < 1:
+        current_size = context_sizes.get(chat_id, DEFAULT_CONTEXT_SIZE)
+        current_length = summary_lengths.get(chat_id, DEFAULT_SUMMARY_LENGTH)
+        update.message.reply_text(
+            f"ℹ️ Cài đặt ngữ cảnh hiện tại:\n"
+            f"- Số lượng tin nhắn: {current_size} (tối đa {MAX_CONTEXT_SIZE})\n"
+            f"- Độ dài tóm tắt: {current_length} ký tự (giới hạn {MIN_SUMMARY_LENGTH}-{MAX_SUMMARY_LENGTH})\n\n"
+            f"Để thay đổi, hãy sử dụng: /setmemorybank <số_tin_nhắn> [độ_dài_tóm_tắt]\n"
+            f"Ví dụ: /setmemorybank 10 hoặc /setmemorybank 10 200"
+        )
+        return
+    
+    try:
+        # Parse first parameter (context size)
+        size = int(context.args[0])
+        
+        # Parse second parameter (summary length) if provided
+        summary_length = None
+        if len(context.args) >= 2:
+            try:
+                summary_length = int(context.args[1])
+            except ValueError:
+                update.message.reply_text(
+                    f"❌ Độ dài tóm tắt phải là một số. Ví dụ: /setmemorybank 10 200"
+                )
+                return
+        
+        # Set values and get actual values after limits applied
+        new_size, new_length = set_context_size(chat_id, size, summary_length)
+        
+        # Compose response message
+        message_parts = []
+        
+        # Report on size changes
+        if size != new_size:
+            message_parts.append(
+                f"ℹ️ Đã điều chỉnh kích thước ngữ cảnh thành {new_size} (giới hạn: 0-{MAX_CONTEXT_SIZE})"
+            )
+        else:
+            message_parts.append(f"✅ Đã thiết lập kích thước ngữ cảnh thành {new_size}")
+        
+        # Report on summary length changes if that parameter was provided
+        if summary_length is not None:
+            if summary_length != new_length:
+                message_parts.append(
+                    f"ℹ️ Đã điều chỉnh độ dài tóm tắt thành {new_length} ký tự (giới hạn: {MIN_SUMMARY_LENGTH}-{MAX_SUMMARY_LENGTH})"
+                )
+            else:
+                message_parts.append(f"✅ Đã thiết lập độ dài tóm tắt thành {new_length} ký tự")
+        
+        # Send response
+        update.message.reply_text("\n".join(message_parts))
+        
+    except ValueError:
+        update.message.reply_text(
+            "❌ Vui lòng nhập một số. Ví dụ: /setmemorybank 10 hoặc /setmemorybank 10 200"
+        )
 
 # ====== Main Bot Setup ======
 
@@ -1439,6 +1727,8 @@ def main():
     dp.add_handler(CommandHandler("qr", get_qr, filters=Filters.chat_type.groups | Filters.chat_type.private))
     dp.add_handler(CommandHandler("get", get_qr, filters=Filters.chat_type.groups | Filters.chat_type.private))
     dp.add_handler(CommandHandler("help", help_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
+    dp.add_handler(CommandHandler("setmemorybank", set_memory_bank_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
+    dp.add_handler(CommandHandler("showmemorybank", show_memory_bank_command, filters=Filters.chat_type.groups | Filters.chat_type.private))
     
     # Admin commands
     dp.add_handler(CommandHandler("shutdown", shutdown_command, filters=Filters.chat_type.groups | Filters.chat_type.private))

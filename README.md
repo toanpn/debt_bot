@@ -13,6 +13,7 @@ A Telegram bot for tracking debts among friends and groups with natural language
 - 🔄 Clear debts with other users
 - 👤 Set custom display names
 - 🤖 Natural language processing using AI (Gemini, Grok, or DeepSeek)
+- 🧠 Chat memory for better conversations per group
 - 📦 Database backup and restoration
 - 💾 Multi-group support with data isolation
 - 🔄 Support for multiple AI models with easy switching
@@ -56,6 +57,14 @@ A Telegram bot for tracking debts among friends and groups with natural language
 - `/setname @username tên_hiển_thị` - Set display name
   - Example: `/setname @toan Anh Toàn`
 
+- `/setmemorybank <số_tin_nhắn> [độ_dài_tóm_tắt]` - Configure the chat memory settings
+  - First parameter (required): Number of messages to remember (default: 5, max: 20)
+  - Second parameter (optional): Summary character length (default: 150, range: 50-500)
+  - Example: `/setmemorybank 10` - Set to remember 10 messages with default summary length
+  - Example: `/setmemorybank 10 200` - Remember 10 messages with 200-character summaries
+  - Example: `/setmemorybank 0` - Disable memory bank completely
+  - The bot uses AI to summarize conversations for better contextual responses
+
 - `/help` - View help information
 
 ### 🛠️ Admin Commands
@@ -63,6 +72,7 @@ A Telegram bot for tracking debts among friends and groups with natural language
 - `/shutdown` - Safely shut down the bot
 - `/backup` - Back up database and send the file via Telegram
 - `/switchmodel <model_name>` - Switch between AI models (gemini, grok, or deepseek)
+- `/showmemorybank` - Show current chat memory context for debugging purposes
 
 ## Setup
 
@@ -97,6 +107,18 @@ The bot uses SQLite for data storage with the following tables:
 - `name_mappings` - Maps usernames to display names in specific chat contexts
 - `qr_codes` - Stores payment QR codes for users
 
+## Memory Bank Feature
+
+The bot uses a memory bank feature to remember previous conversations in each group:
+- Each group has its own memory bank (no cross-group memory leakage)
+- The bot can remember up to 20 messages per group (configurable)
+- AI-powered summaries are generated for each conversation exchange
+- Summary length is configurable from 50 to 500 characters (default: 150)
+- Instead of storing full conversations, the bot maintains concise summaries of key information
+- This allows the bot to have more intelligent and context-aware conversations
+- Users can adjust memory size and summary length with `/setmemorybank` command
+- Memory is stored in RAM (not persistent across bot restarts)
+
 ## Requirements
 
 ```
@@ -116,7 +138,7 @@ openai # For DeepSeek support
 
 ## Natural Language Support
 
-The bot `supports natural language commands when mentioned. For example:
+The bot supports natural language commands when mentioned. For example:
 - "@DebtBot add debt 50k to @toan for coffee"
 - "@DebtBot split 90k between me, @quy and @tuan"
 - "@DebtBot how much do I owe?"
