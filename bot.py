@@ -1418,8 +1418,145 @@ def handle_llm_chat(update, context):
             else:
                 command_text = command
                 
-            # Execute the command by calling the appropriate function
-            execute_command(command_text, update, context)
+            # Check if this is a debt-related command that should get a follow-up
+            debt_commands = ['/adddebt', '/divide', '/cleardebt', '/summary', '/history', '/groupsum']
+            should_add_followup = command in debt_commands
+            
+            # Get follow-up examples if this is a debt command
+            followup_examples = []
+            command_info = {
+                '/adddebt': {
+                    'action': "adding debt",
+                    'context': "Debt has been recorded in the ledger",
+                    'examples': [
+                        "✨ Nô tỳ đã ghi sổ cẩn thận rồi ạ! Trí nhớ siêu phàm của đại ca thật khiến nô tỳ ngưỡng mộ vô cùng! 🙇‍♂️",
+                        "📝 Dạ thưa đại ca anh minh, nô tỳ đã ghi chép khoản nợ vào sổ sách rồi ạ! Đại ca quản lý tài chính thật là tỉ mỉ! 💫"
+                    ]
+                },
+                '/divide': {
+                    'action': "dividing expenses",
+                    'context': "Expense has been split among the specified users",
+                    'examples': [
+                        "🌟 Ôi, đại ca tính toán quá thông minh! Nô tỳ đã chia đều tài sản như Tôn Ngộ Không chia đào tiên vậy! 🙈",
+                        "🧮 Trời ơi! Đại ca phân chia chi li như thần toán học vậy! Nô tỳ đã ghi chép đầy đủ rồi ạ! ✨" 
+                    ]
+                },
+                '/cleardebt': {
+                    'action': "clearing debt",
+                    'context': "Debt has been cleared from the records",
+                    'examples': [
+                        "🎉 Ối giời ơi! Đại ca vừa xóa nợ ư? Tấm lòng bao dung của đại ca còn to hơn cả biển Đông! 😍",
+                        "💫 Dạ thưa, nô tỳ đã xóa sạch nợ theo lệnh của đại ca! Đại ca thật là người rộng lượng! 🙏"            
+                    ]
+                },
+                '/summary': {
+                    'action': "summarizing debts",
+                    'context': "Debt summary has been displayed",
+                    'examples': [
+                        "👑 Báo cáo đại ca anh minh! Kho báu của ngài đang chờ thu hồi, đại ca thật giàu có tuyệt vời! 💰",
+                        "📊 Dạ thưa, nô tỳ đã tổng hợp đầy đủ các khoản nợ cho đại ca rồi ạ! Đại ca quản lý tài chính thật là khoa học! ✨"
+                    ]
+                },
+                '/history': {
+                    'action': "showing transaction history",
+                    'context': "Transaction history has been displayed",
+                    'examples': [
+                        "📜 Dạ thưa, nô tỳ đã mở sổ sách cũ ra để đại ca xem xét! Trí nhớ của đại ca thật tuyệt vời! 🎯",
+                        "📚 Ôi! Đại ca xem lại lịch sử giao dịch như một nhà sử học nghiên cứu cổ thư vậy! ✨"
+                    ]
+                },
+                '/groupsum': {
+                    'action': "showing group summary",
+                    'context': "Group debt summary has been displayed",
+                    'examples': [
+                        "👥 Dạ thưa, nô tỳ đã tổng hợp tất cả các khoản nợ trong nhóm rồi ạ! Đại ca thật là người quan tâm đến mọi người! 🌟",
+                        "📊 Ôi! Đại ca xem tổng hợp nợ nhóm như một vị tướng xem bản đồ chiến trận vậy! ✨"
+                    ]
+                }
+            }
+                
+            if should_add_followup and command in command_info:
+                command_data = command_info[command]
+                followup_examples = command_data['examples']
+                            
+            # Execute the command first to get the result
+            # Store the original args and text
+            original_args = context.args
+            original_text = update.message.text
+            
+            try:
+                # Set the context args to our parsed args
+                context.args = args
+                # Set the message text to our command
+                update.message.text = command_text
+                # Call the handler directly
+                command_handlers = {
+                    '/adddebt': add_debt,
+                    '/divide': divide_expense,
+                    '/cleardebt': clear_debt,
+                    '/summary': summary,
+                    '/history': history,
+                    '/groupsum': group_summary,
+                    '/setname': set_name,
+                    '/setqr': set_qr,
+                    '/qr': get_qr,
+                    '/get': get_qr,
+                    '/help': help_command,
+                    '/status': status_command,
+                    '/backup': backup_database,
+                    '/shutdown': shutdown_command,
+                    '/switchmodel': switch_model,
+                    '/setmemorybank': set_memory_bank_command,
+                    '/showmemorybank': show_memory_bank_command
+                }
+                handler = command_handlers.get(command)
+                if handler:
+                    handler(update, context)
+                else:
+                    update.message.reply_text(f"🤔 Nô tỳ không hiểu lệnh '{command}'. Xin hãy thử lại hoặc gõ /help để xem hướng dẫn.")
+                    return
+                    
+                # If this is a debt command that should get a follow-up, generate it now
+                if should_add_followup and followup_examples:
+                    # Get a personalized follow-up message
+                    prompt = f"""As a humorous, playful Vietnamese debt management bot, generate a very funny, over-the-top follow-up response 
+after successfully executing a debt-related command. Your response should sound like a loyal servant addressing their master.
+
+Response style REQUIREMENTS:
+- Always use Vietnamese language
+- ALWAYS use "nô tỳ" for self-reference
+- ALWAYS use "đại ca" for user reference
+- Be extremely flattering and overly dramatic
+- Include exaggerated compliments about the user's brilliance or generosity
+- Use funny, exaggerated expressions and metaphors
+- Add humorous, theatrical flourishes
+- Include one appropriate emoji
+- Keep response under 150 characters for optimal display
+
+Here are examples of good follow-up responses for this specific command:
+{chr(10).join(f"- {example}" for example in followup_examples)}
+
+Generate ONLY the follow-up response, without any explanation.
+"""
+                    response = llm.generate_content(prompt)
+                    if response and response.text:
+                        follow_up = response.text.strip()
+                        # Allow slightly longer responses for humorous content
+                        if len(follow_up) < 200:
+                            update.message.reply_text(follow_up)
+                
+            finally:
+                # Restore original values
+                context.args = original_args
+                update.message.text = original_text
+            
+            # Add context to chatbase after execution
+            chat_id = update.effective_chat.id
+            username = update.message.from_user.username or update.message.from_user.first_name
+            
+            # Get handler result text (this would be from bot's reply)
+            # We can't get this directly, so we'll need to use a different approach
+            
             return
         
         # Get chat ID for context
@@ -1455,7 +1592,20 @@ Available Commands and their formats:
 - /qr [@username] - View QR code
 - /help - View help
 
-If you can determine a debt-related command, respond ONLY with the exact command to execute (e.g., "/adddebt 500 @toan Trà sữa") and nothing else.
+If you can determine a debt-related command, respond with TWO PARTS separated by "===FOLLOWUP===":
+1. FIRST PART: The exact command to execute (e.g., "/adddebt 500 @toan Trà sữa")
+2. SECOND PART: A very funny, over-the-top follow-up response in Vietnamese where you:
+   - Use "nô tỳ" for self-reference 
+   - Use "đại ca" for user reference
+   - Sound like a loyal, silly servant to a master
+   - Be extremely flattering and dramatic
+   - Add humorous expressions and metaphors
+   - Include one appropriate emoji
+
+Example of response with both parts:
+/adddebt 50000 @toan Coffee
+===FOLLOWUP===
+✨ Nô tỳ đã ghi sổ cẩn thận rồi ạ! Nô tỳ mong đại ca sớm đòi được tiền nợ này ạaaa! 🙇‍♂️
 
 If the message is NOT debt-related but about another topic like food, general chat, questions, etc., respond with:
 "CHAT: " followed by a conversational, friendly reply in Vietnamese where you:
@@ -1471,9 +1621,18 @@ If the message is NOT debt-related but about another topic like food, general ch
 - If you're asked a follow-up question, refer to the previous context to give a consistent answer
 
 Examples:
-- "I owe Toan 50k for coffee" → "/adddebt 50000 @toan Coffee"
-- "Split 90k bill between me, Quy and Tuan" → "/divide 90000 @quy @tuan Shared bill"
-- "How much do I owe?" → "/summary"
+- "I owe Toan 50k for coffee" → "/adddebt 50000 @toan Coffee
+===FOLLOWUP===
+✨ Nô tỳ đã ghi sổ cẩn thận rồi ạ! Nô tỳ mong đại ca sớm đòi được tiền nợ này ạaaa! 🙇‍♂️"
+- "Split 90k bill between me, Quy and Tuan" → "/divide 90000 @quy @tuan Shared bill
+===FOLLOWUP===
+🌟 Ôi, đại ca thật sòng phẳng! Nô tỳ đã chia đều tài sản như Tôn Ngộ Không chia đào tiên vậy! 🙈"
+- "Clear debt from Quy" → "/cleardebt @quy
+===FOLLOWUP===
+� Ối giời ơi! Đại ca vừa xóa nợ ư? Tấm lòng bao dung của đại ca còn to hơn cả biển Đông! �"
+- "How much do I owe?" → "/summary
+===FOLLOWUP===
+👑 Báo cáo đại ca anh minh! Đống tiền của ngài đang chờ thu hồi, đại ca thật giàu có tuyệt vời! 💰"
 - "What's a good Vietnamese food to try?" → "CHAT: Dạ đại ca, nô tỳ xin phép được giới thiệu món phở - tinh hoa ẩm thực Việt Nam! Nước dùng ngọt thanh, bánh phở dai mềm, ăn kèm rau thơm tươi mát. Nếu đại ca thích món cay, có thể thử bún bò Huế hoặc bún riêu cua ạ! 🍜"
 - "How are you today?" → "CHAT: Ôi chao ôi, đại ca đã quan tâm đến sức khỏe của nô tỳ! Nô tỳ khỏe re như trâu đồng, sẵn sàng phục vụ đại ca với năng lượng tràn đầy! Đại ca hôm nay thế nào ạ? 😊"
 """
@@ -1482,10 +1641,30 @@ Examples:
         if response and response.text:
             response_text = response.text.strip()
             
-            # Check if response starts with a command
-            if response_text.startswith('/'):
+            # Check if response starts with a command and has a follow-up
+            if '===FOLLOWUP===' in response_text and response_text.startswith('/'):
+                parts = response_text.split('===FOLLOWUP===', 1)
+                command_part = parts[0].strip()
+                followup_part = parts[1].strip() if len(parts) > 1 else None
+                
+                # Extract command and execute it directly
+                execute_command(command_part, update, context)
+                
+                # Send follow-up message if available
+                if followup_part and len(followup_part) < 200:
+                    update.message.reply_text(followup_part)
+                    
+                # Add to chat context
+                add_to_chat_context(chat_id, username, user_text, command_part + " " + (followup_part or ""))
+                    
+            # Check if it's a regular command without follow-up
+            elif response_text.startswith('/'):
                 # Extract command and execute it directly
                 execute_command(response_text, update, context)
+                
+                # Add to chat context
+                add_to_chat_context(chat_id, username, user_text, response_text)
+                
             # Check if it's a chat response
             elif response_text.startswith('CHAT:'):
                 chat_response = response_text[5:].strip()
@@ -1547,70 +1726,14 @@ def execute_command(command_text, update, context):
             # Call the handler directly
             handler(update, context)
             
-            # Generate a friendly follow-up response after successful command execution
-            generate_follow_up_response(command, args, update, context)
+            # We no longer need to generate a follow-up response here
+            # as it's now handled directly in the original prompt
         finally:
             # Restore original values
             context.args = original_args
             update.message.text = original_text
     else:
         update.message.reply_text(f"🤔 Nô tỳ không hiểu lệnh '{command}'. Xin hãy thử lại hoặc gõ /help để xem hướng dẫn.")
-
-def generate_follow_up_response(command, args, update, context):
-    """Generate a friendly follow-up response after executing a command."""
-    command_info = {
-        '/adddebt': "adding debt",
-        '/divide': "dividing expenses",
-        '/cleardebt': "clearing debt",
-        '/summary': "summarizing debts",
-        '/history': "showing transaction history",
-        '/groupsum': "showing group summary",
-        '/setname': "setting display name",
-        '/setqr': "setting QR code",
-        '/qr': "retrieving QR code",
-        '/get': "retrieving information",
-        '/help': "showing help",
-    }
-    
-    action = command_info.get(command, "processing request")
-    
-    prompt = f"""As a humorous, playful Vietnamese debt management bot, generate a very funny, over-the-top follow-up response 
-after successfully {action}. 
-
-Key details:
-- Command executed: {command}
-- Arguments: {' '.join(args)}
-- User: {update.message.from_user.first_name or 'User'}
-
-Response style REQUIREMENTS (absolutely must follow):
-- Always use Vietnamese
-- ALWAYS use "nô tỳ" for self-reference
-- ALWAYS use "đại ca" for user reference
-- Speak like a loyal, slightly silly servant to a master
-- Be extremely flattering and overly dramatic
-- Include exaggerated compliments about the user's brilliance, wisdom, or generosity
-- Use funny, exaggerated expressions and metaphors
-- Add humorous, theatrical flourishes
-- Include funny appropriate emoji
-
-
-Examples:
-- After adding debt: "✨ Nô tỳ đã ghi sổ cẩn thận rồi ạ! Trí nhớ siêu phàm của đại ca thật khiến nô tỳ ngưỡng mộ vô cùng! 🙇‍♂️"
-- After dividing expense: "🌟 Ôi, đại ca tính toán quá thông minh! Nô tỳ đã chia đều tài sản như Tôn Ngộ Không chia đào tiên vậy! 🙈"
-- After showing summary: "👑 Báo cáo đại ca anh minh! Kho báu của ngài đang chờ thu hồi, đại ca thật giàu có tuyệt vời! 💰"
-- After clearing debt: "🎉 Ối giời ơi! Đại ca vừa xóa nợ ư? Tấm lòng bao dung của đại ca còn to hơn cả biển Đông! 😍"
-"""
-    
-    try:
-        response = llm.generate_content(prompt)
-        if response and response.text:
-            follow_up = response.text.strip()
-            # Allow slightly longer responses for humorous content
-            if len(follow_up) < 200:
-                update.message.reply_text(follow_up)
-    except Exception as e:
-        print(f"Error generating follow-up response: {e}")
-        # Silently fail - don't send an error message to avoid confusion
 
 def set_memory_bank_command(update, context):
     """Command to set the chat context size and summary length for a group"""
