@@ -518,13 +518,13 @@ def add_debt(update, context):
             return
             
         # Extract note (anything after usernames)
-        note_start_idx = 1 + len(debtors)
+        note_start_idx = None
         for i in range(1, len(context.args)):
-            if not context.args[i].startswith('@'):
+            if not context.args[i].startswith('@') and i > context.args.index(context.args[1]) + len(debtors) - 1:
                 note_start_idx = i
                 break
                 
-        note = " ".join(context.args[note_start_idx:]) if note_start_idx < len(context.args) else ""
+        note = " ".join(context.args[note_start_idx:]) if note_start_idx is not None else ""
             
         timestamp = datetime.now().isoformat()
         
