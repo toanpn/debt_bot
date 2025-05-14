@@ -262,14 +262,36 @@ def set_context_size(chat_id, size, summary_length=None):
 
 # Set database path - use environment variable or default to data directory
 DB_DIR = os.environ.get('DB_DIR', os.path.join(os.path.expanduser('~'), 'bot_data'))
-DB_PATH = os.path.join(DB_DIR, 'debtbot.db')
+DEFAULT_DB_NAME = 'debtbot.db'
+DB_PATH = os.path.join(DB_DIR, DEFAULT_DB_NAME)
 
 # Define your admin user IDs here - moved up for backup functions to use
 ADMIN_IDS = [1095200180]  # Replace with your Telegram user ID
 
 # Define repository directory where backup files might be stored
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_DB_PATH = os.path.join(REPO_DIR, 'debtbot.db')
+REPO_DB_PATH = os.path.join(REPO_DIR, DEFAULT_DB_NAME)
+
+# Find the newest database file in the given directory
+def find_newest_db_file():
+    try:
+        # Get all .db files in the directory
+        db_files = [f for f in os.listdir(DB_DIR) if f.endswith('.db')]
+        
+        # Filter for files matching the pattern "debtbot_YYYYMMDD_HHMMSS.db"
+        pattern_files = [f for f in db_files if re.match(r'debtbot_\d{8}_\d{6}\.db', f)]
+        
+        if not pattern_files:
+            print(f"No database files matching the pattern found in {DB_DIR}")
+            return None
+        
+        # Sort files by modification time (newest first)
+        newest_file = max(pattern_files, key=lambda f: os.path.getmtime(os.path.join(DB_DIR, f)))
+        print(f"Found newest database file: {newest_file}")
+        return os.path.join(DB_DIR, newest_file)
+    except Exception as e:
+        print(f"Error finding newest database file: {e}")
+        return None
 
 # Check for DB file in repository first
 def check_repository_db():
@@ -324,8 +346,16 @@ print(f"Using database at: {DB_PATH}")
 # Check if database exists in repository first
 check_repository_db()
 
+# Try to find the newest database file in the DB_DIR
+newest_db = find_newest_db_file()
+if newest_db:
+    print(f"Using the newest database file found: {newest_db}")
+    DB_PATH = newest_db
+else:
+    print(f"No newer database files found, using default: {DB_PATH}")
+
 # Check if another instance is running
-check_instance()
+#check_instance()
 
 # ====== DB Migration ======
 
