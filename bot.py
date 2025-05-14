@@ -299,9 +299,13 @@ def check_repository_db():
         print(f"Found database file in repository: {REPO_DB_PATH}")
         # Ensure DB_DIR exists
         os.makedirs(DB_DIR, exist_ok=True)
-        # Copy the repo database file to the standard location
-        shutil.copy2(REPO_DB_PATH, DB_PATH)
-        print(f"Copied database from repository to: {DB_PATH}")
+        # Only copy if they're not the same file
+        if os.path.abspath(REPO_DB_PATH) != os.path.abspath(DB_PATH):
+            # Copy the repo database file to the standard location
+            print(f"Copying database from repository to: {DB_PATH}")
+            shutil.copy2(REPO_DB_PATH, DB_PATH)
+        else:
+            print(f"Repository DB and target DB are the same file: {DB_PATH}")
         return True
     return False
 
