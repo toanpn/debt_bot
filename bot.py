@@ -525,7 +525,67 @@ def add_debt(update, context):
                 break
                 
         note = " ".join(context.args[note_start_idx:]) if note_start_idx is not None else ""
+        
+        # Clean up note - extract only the actual note, removing any command strings or trailing characters
+        if note:
+            # Simple fix for the common case seen in the screenshots - detect repeated patterns like "Bún đậu"
+            common_notes = []
+            note_parts = re.split(r'/adddebt|;|,|\.|@\w+', note)
+            note_parts = [part.strip() for part in note_parts if part.strip() and not part.strip().isdigit()]
             
+            if note_parts:
+                # Find the most frequent non-empty part
+                from collections import Counter
+                note_counter = Counter(note_parts)
+                most_common = note_counter.most_common(1)
+                if most_common and most_common[0][1] > 1:  # If any part appears more than once
+                    note = most_common[0][0].strip()
+                elif len(note_parts) > 0:
+                    # If no repeating parts, just take the first non-empty part
+                    note = note_parts[0].strip()
+            
+            # Remove any trailing commands (look for patterns like "; /command" or ". /command")
+            if ';' in note:
+                note = note.split(';')[0].strip()
+            elif '.' in note and '/add' in note.lower():
+                note = note.split('.')[0].strip()
+            
+            # If the note contains "/adddebt" or similar patterns, extract only the text after @username
+            if '/add' in note.lower():
+                parts = note.split('@')
+                if len(parts) > 1:
+                    # Find the actual note after the username
+                    for part in parts[1:]:
+                        if ' ' in part:
+                            username_end = part.find(' ')
+                            if username_end > 0:
+                                note_part = part[username_end:].strip()
+                                # Skip if it's just a number (amount)
+                                try:
+                                    float(note_part)
+                                    continue
+                                except ValueError:
+                                    note = note_part
+                                    break
+            
+            # Remove any extra punctuation at the beginning of the note
+            note = note.lstrip('.,;:-').strip()
+            
+            # Handle common repeated phrases (like "Bún đậu" in the example)
+            # Find the most common distinct phrase in the note that's not a command or username
+            words = note.split()
+            if len(words) >= 2:
+                # Look for repeating phrases (2+ words)
+                for phrase_len in range(2, min(4, len(words))):  # Check phrases of 2-3 words
+                    phrases = [' '.join(words[i:i+phrase_len]) for i in range(len(words)-phrase_len+1)]
+                    for phrase in phrases:
+                        # Skip phrases containing commands or usernames
+                        if '/' in phrase or '@' in phrase:
+                            continue
+                        if phrases.count(phrase) > 1 and len(phrase) > 3:  # Only if it appears multiple times and meaningful
+                            note = phrase
+                            break
+        
         timestamp = datetime.now().isoformat()
         
         results = []
@@ -1462,9 +1522,23 @@ First, determine if this message relates to debt management, checking for comman
 - Clear debt (/cleardebt) - includes: marking debt as paid, removing debt records
 - View history (/history) - includes: transaction history, past debts
 - Group summary (/groupsum) - includes: everyone's debts, group balances
+- QR code (/qr) - includes: show QR code, payment QR, share QR, see someone's QR
+
+DETAILED COMMAND INSTRUCTIONS:
+1. /summary - Shows all debts the user owes or is owed. No additional parameters needed.
+2. /adddebt [amount] [@person] [description] - Records a debt where:
+   - [amount]: Money amount in VND
+   - [@person]: Tag the person who is owed (use @ followed by username)
+   - [description]: Brief description of what the debt is for
+   - FOR MULTIPLE PEOPLE: Use format "/adddebt [amount] [@person1 @person2 @person3] [description]" to split equally
+3. /divide [total_amount] [@person1 @person2...] [description] - Splits a bill evenly among tagged people
+4. /cleardebt [debt_id] - Marks a specific debt as paid using its ID
+5. /history - Shows recent debt transactions
+6. /groupsum - Displays everyone's debt balance in the group
+7. /qr [@username] - Shows QR code of user or another person if username is specified
 
 If this IS debt-related, respond with TWO PARTS separated by "===FOLLOWUP===":
-1. FIRST PART: The exact command to execute (e.g., "/summary", "/adddebt 500 @toan Trà sữa")
+1. FIRST PART: Generate ONLY ONE exact command to execute (e.g., "/summary", "/adddebt 500000 @toan Trà sữa")
 2. SECOND PART: A funny, over-the-top response in Vietnamese where you:
    - Use "nô tỳ" for self-reference 
    - Use "đại ca" for user reference
@@ -1474,13 +1548,29 @@ If this IS debt-related, respond with TWO PARTS separated by "===FOLLOWUP===":
    - Include one appropriate emoji
 
 Examples of debt-related responses:
-- "I don't have debt, do I need to pay?" or "Do I owe anything?" → "/summary
+- "Tôi có nợ ai không?" or "Tôi cần trả ai tiền không?" → "/summary
 ===FOLLOWUP===
 🎉 Để nô tỳ xem sổ sách nợ nần của đại ca! Đại ca quản lý tài chính thông minh như thần tài vậy!"
 
-- "I owe Toan 50k for coffee" → "/adddebt 50000 @toan Coffee
+- "Tôi nợ anh Toàn 50k tiền cà phê" → "/adddebt 50000 @toan Coffee
 ===FOLLOWUP===
 ✨ Nô tỳ đã ghi sổ cẩn thận rồi ạ! Nô tỳ mong đại ca sớm đòi được tiền nợ này ạ! 🙇‍♂️"
+
+- "Chia tiền ăn trưa 300k giữa tôi, An và Minh" → "/divide 300000 @toanpn @an @minh Lunch
+===FOLLOWUP===
+💰 Nô tỳ đã chia hóa đơn theo ý đại ca! Tiền nong rõ ràng, tình bạn vẹn toàn!"
+
+- "Cho tôi xem mã QR của tôi" or "Đưa QR code của tôi" → "/qr
+===FOLLOWUP===
+📱 Xin phép được trình lên đại ca mã QR cao quý! Mong đại ca sớm nhận được những khoản thanh toán xứng tầm!"
+
+- "Xóa nợ của tôi với anh Toàn" → "/cleardebt @toan
+===FOLLOWUP===
+🧹 Nô tỳ đã xóa sạch nợ nần theo lệnh đại ca! Thanh toán xong xuôi, đại ca thật là người trọng danh dự!"
+
+- "Cho tôi xem nợ của cả nhóm" → "/groupsum
+===FOLLOWUP===
+👑 Nô tỳ xin báo cáo toàn cảnh nợ nần trong nhóm! Đại ca thật tinh tường khi muốn nắm bắt tình hình tài chính của cả đám!"
 
 If it is NOT debt-related, respond with:
 "CHAT: " followed by a conversational reply in Vietnamese where you:
@@ -1491,7 +1581,7 @@ If it is NOT debt-related, respond with:
 - Add personality and humor
 - Include an appropriate emoji
 
-Be extremely precise with command detection and execution. Vietnamese queries about owing money, checking debts, or needing to pay MUST be treated as debt-related (/summary).
+Be extremely precise with command detection and execution. Vietnamese queries about owing money, checking debts, or needing to pay MUST be treated as debt-related (/summary). GENERATE ONLY ONE COMMAND.
 """
         
         response = llm.generate_content(prompt)
